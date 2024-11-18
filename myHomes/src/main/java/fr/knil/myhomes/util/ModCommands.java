@@ -4,6 +4,7 @@ import com.google.gson.Gson;
 import com.google.gson.reflect.TypeToken;
 import com.mojang.brigadier.arguments.StringArgumentType;
 import com.mojang.brigadier.context.CommandContext;
+
 import net.fabricmc.fabric.api.command.v2.CommandRegistrationCallback;
 import net.minecraft.server.command.ServerCommandSource;
 import net.minecraft.server.network.ServerPlayerEntity;
@@ -28,9 +29,12 @@ public class ModCommands {
     private static final File DATA_FILE = new File("home_positions.json");
     private static final Map<String, Map<String, BlockPos>> savedHomes = new HashMap<>();
     private static final Gson GSON = new Gson();
+    private static final File SPAWN_FILE = new File("spawn_points.json");
+    private static final Map<String, BlockPos> spawnPoints = new HashMap<>();
 
     public static void registerCommands() {
         loadHomes();
+        loadSpawnPoints();
 
         CommandRegistrationCallback.EVENT.register((dispatcher, registryAccess, environment) -> {
             // Commande /sethome <nom>
@@ -67,9 +71,83 @@ public class ModCommands {
                 .then(argument("player", StringArgumentType.string())
                     .executes(context -> teleportHere(context, StringArgumentType.getString(context, "player"))))
             );
+           
+            // commande /warp
+            dispatcher.register(literal("spawn")
+            	    .executes(context -> teleportToSpawn(context, "spawn"))
+            	    .then(argument("name", string())
+            	        .executes(context -> teleportToSpawn(context, getString(context, "name"))))
+            	);
+            
+            // commande /setspawn
+            dispatcher.register(literal("setspawn")
+            	    .then(argument("name", string())
+            	        .executes(context -> setSpawnPoint(context, getString(context, "name"))))
+            	);
+                                   
         });
     }
+    
+    private static int setSpawnPoint(CommandContext<ServerCommandSource> context, String name) {
+        ServerPlayerEntity player = context.getSource().getPlayer();
+        BlockPos currentPos = player.getBlockPos();
 
+        spawnPoints.put(name, currentPos);
+
+        // Sauvegarder dans le fichier
+        try (FileWriter writer = new FileWriter(SPAWN_FILE)) {
+            Map<String, Map<String, Integer>> rawData = new HashMap<>();
+            spawnPoints.forEach((key, pos) -> {
+                Map<String, Integer> coords = new HashMap<>();
+                coords.put("x", pos.getX());
+                coords.put("y", pos.getY());
+                coords.put("z", pos.getZ());
+                rawData.put(key, coords);
+            });
+            GSON.toJson(rawData, writer);
+        } catch (IOException e) {
+            System.err.println("Failed to save spawn points: " + e.getMessage());
+        }
+
+        player.sendMessage(Text.literal("Spawn point '" + name + "' set!"), false);
+        return 1;
+    }
+    
+    private static void loadSpawnPoints() {
+        if (SPAWN_FILE.exists()) {
+            try (FileReader reader = new FileReader(SPAWN_FILE)) {
+                Type type = new TypeToken<Map<String, Map<String, Integer>>>() {}.getType();
+                Map<String, Map<String, Integer>> rawData = GSON.fromJson(reader, type);
+
+                // Convertir les données en BlockPos
+                rawData.forEach((name, coords) -> {
+                    if (coords.containsKey("x") && coords.containsKey("y") && coords.containsKey("z")) {
+                        int x = coords.get("x");
+                        int y = coords.get("y");
+                        int z = coords.get("z");
+                        spawnPoints.put(name, new BlockPos(x, y, z));
+                    }
+                });
+            } catch (IOException e) {
+                System.err.println("Failed to load spawn points: " + e.getMessage());
+            }
+        }
+    }
+    
+    private static int teleportToSpawn(CommandContext<ServerCommandSource> context, String name) {
+        ServerPlayerEntity player = context.getSource().getPlayer();
+        BlockPos targetPos = spawnPoints.getOrDefault(name, spawnPoints.get("spawn"));
+
+        if (targetPos == null) {
+            player.sendMessage(Text.literal("Spawn point '" + name + "' not found."), false);
+            return 0;
+        }
+
+        player.requestTeleport(targetPos.getX() + 0.5, targetPos.getY(), targetPos.getZ() + 0.5);
+        player.sendMessage(Text.literal("Teleported to " + name + "."), false);
+        return 1;
+    }
+    
     private static int setHome(CommandContext<ServerCommandSource> context, String name) {
         ServerPlayerEntity player = context.getSource().getPlayer();
         String playerId = player.getUuidAsString();
