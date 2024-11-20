@@ -4,11 +4,13 @@ import com.google.gson.Gson;
 import com.google.gson.reflect.TypeToken;
 import com.mojang.brigadier.arguments.StringArgumentType;
 import com.mojang.brigadier.context.CommandContext;
+import com.mojang.brigadier.exceptions.CommandSyntaxException;
 
 import net.fabricmc.fabric.api.command.v2.CommandRegistrationCallback;
 import net.minecraft.server.command.ServerCommandSource;
 import net.minecraft.server.network.ServerPlayerEntity;
 import net.minecraft.text.Text;
+import net.minecraft.util.Formatting;
 import net.minecraft.util.math.BlockPos;
 
 import java.io.File;
@@ -18,6 +20,12 @@ import java.io.IOException;
 import java.lang.reflect.Type;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.UUID;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.TimeUnit;
+import java.util.function.Supplier;
 
 import static net.minecraft.server.command.CommandManager.argument;
 import static net.minecraft.server.command.CommandManager.literal;
@@ -26,18 +34,36 @@ import static com.mojang.brigadier.arguments.StringArgumentType.string;
 
 
 public class ModCommands {
-    private static final File DATA_FILE = new File("home_positions.json");
+	private static final File DATA_DIRECTORY = new File("myHome_files"); // Répertoire des fichiers
+    private static final File HOME_FILE = new File(DATA_DIRECTORY, "home_positions.json"); // Fichier des homes
+    private static final File SPAWN_FILE = new File(DATA_DIRECTORY, "spawn_locations.json"); // Fichier des spawns
+    private static final File WARP_FILE = new File(DATA_DIRECTORY, "warp_locations.json"); // Fichier des spawns
     private static final Map<String, Map<String, BlockPos>> savedHomes = new HashMap<>();
     private static final Gson GSON = new Gson();
-    private static final File SPAWN_FILE = new File("spawn_points.json");
     private static final Map<String, BlockPos> spawnPoints = new HashMap<>();
+    private static final Map<UUID, TeleportRequest> teleportRequests = new HashMap<>();
+    private static final ScheduledExecutorService scheduler = Executors.newScheduledThreadPool(1);
+    private static final Map<String, BlockPos> spawnLocations = new HashMap<>();
+
+    static {
+        // Créer le répertoire si nécessaire
+        if (!DATA_DIRECTORY.exists()) {
+            if (DATA_DIRECTORY.mkdirs()) {
+                System.out.println("Created directory: " + DATA_DIRECTORY.getAbsolutePath());
+            } else {
+                System.err.println("Failed to create directory: " + DATA_DIRECTORY.getAbsolutePath());
+            }
+        }
+    }
 
     public static void registerCommands() {
         loadHomes();
         loadSpawnPoints();
 
         CommandRegistrationCallback.EVENT.register((dispatcher, registryAccess, environment) -> {
-            // Commande /sethome <nom>
+            
+        	
+        	// Commande /sethome <nom>
             dispatcher.register(literal("sethome")
                 .then(argument("name", string())
                     .executes(context -> setHome(context, getString(context, "name"))))
@@ -71,8 +97,22 @@ public class ModCommands {
                 .then(argument("player", StringArgumentType.string())
                     .executes(context -> teleportHere(context, StringArgumentType.getString(context, "player"))))
             );
+            
+            dispatcher.register(literal("tpa")
+            	    .then(argument("player", string())
+            	        .executes(context -> sendTeleportRequest(context, getString(context, "player"))))
+            	);
+
+            
+            dispatcher.register(literal("tpyes")
+            	    .executes(ModCommands::acceptTeleportRequest));
+
+            
+            dispatcher.register(literal("tpno")
+            	    .executes(ModCommands::denyTeleportRequest));
            
-            // commande /warp
+            
+            // commande /spawn
             dispatcher.register(literal("spawn")
             	    .executes(context -> teleportToSpawn(context, "spawn"))
             	    .then(argument("name", string())
@@ -80,15 +120,160 @@ public class ModCommands {
             	);
             
             // commande /setspawn
-            dispatcher.register(literal("setspawn")
+            dispatcher.register(literal("setwarp")
             	    .then(argument("name", string())
-            	        .executes(context -> setSpawnPoint(context, getString(context, "name"))))
+            	        .executes(context -> setWarpPoint(context, getString(context, "name"))))
+            	);
+            
+            
+            
+            dispatcher.register(literal("delspawn")
+            	    .then(argument("name", string())
+            	        .executes(context -> deleteSpawn(context, getString(context, "name"))))
             	);
                                    
         });
     }
     
-    private static int setSpawnPoint(CommandContext<ServerCommandSource> context, String name) {
+ // Classe interne pour gérer une demande de téléportation
+    private static class TeleportRequest {
+        final UUID requesterId;
+        final ScheduledFuture<?> timeoutTask;
+
+        public TeleportRequest(UUID requesterId, ScheduledFuture<?> timeoutTask) {
+            this.requesterId = requesterId;
+            this.timeoutTask = timeoutTask;
+        }
+    }
+    
+    
+    private static int sendTeleportRequest(CommandContext<ServerCommandSource> context, String targetName) throws CommandSyntaxException {
+        ServerPlayerEntity requester = context.getSource().getPlayer();
+        ServerPlayerEntity target = context.getSource().getServer().getPlayerManager().getPlayer(targetName);
+
+        if (target == null) {
+            requester.sendMessage(Text.literal("Player '" + targetName + "' not found."), false);
+            return 0;
+        }
+
+        UUID targetId = target.getUuid();
+
+        // Vérifie si une demande est déjà en attente
+        if (teleportRequests.containsKey(targetId)) {
+            requester.sendMessage(Text.literal("A teleport request is already pending for " + target.getEntityName() + "."), false);
+            return 0;
+        }
+
+        // Planifie un timeout pour la demande
+        ScheduledFuture<?> timeoutTask = scheduler.schedule(() -> {
+            teleportRequests.remove(targetId);
+            target.sendMessage(Text.literal("Teleport request from " + requester.getEntityName() + " has expired."), false);
+        }, 30, TimeUnit.SECONDS);
+
+        // Enregistre la demande
+        teleportRequests.put(targetId, new TeleportRequest(requester.getUuid(), timeoutTask));
+
+        // Envoie un message au joueur cible
+        target.sendMessage(Text.literal(requester.getEntityName() + " wants to teleport to you. Use /tpyes to accept or /tpno to deny.").formatted(Formatting.YELLOW), false);
+        requester.sendMessage(Text.literal("Teleport request sent to " + target.getEntityName() + "."), false);
+
+        return 1;
+    }
+
+    
+    private static int acceptTeleportRequest(CommandContext<ServerCommandSource> context) throws CommandSyntaxException {
+        ServerPlayerEntity target = context.getSource().getPlayer();
+        UUID targetId = target.getUuid();
+
+        // Vérifie s'il y a une demande en attente
+        TeleportRequest request = teleportRequests.remove(targetId);
+        if (request == null) {
+            target.sendMessage(Text.literal("No teleport request to accept."), false);
+            return 0;
+        }
+
+        // Annule le timeout
+        request.timeoutTask.cancel(false);
+
+        // Téléporte le joueur demandeur
+        ServerPlayerEntity requester = context.getSource().getServer().getPlayerManager().getPlayer(request.requesterId);
+        if (requester != null) {
+            requester.requestTeleport(target.getX(), target.getY(), target.getZ());
+            requester.sendMessage(Text.literal("Teleport request accepted. You have been teleported to " + target.getEntityName() + "."), false);
+            target.sendMessage(Text.literal(requester.getEntityName() + " has been teleported to you."), false);
+        } else {
+            target.sendMessage(Text.literal("Player who sent the request is no longer online."), false);
+        }
+
+        return 1;
+    }
+    
+    private static int denyTeleportRequest(CommandContext<ServerCommandSource> context) throws CommandSyntaxException {
+        ServerPlayerEntity target = context.getSource().getPlayer();
+        UUID targetId = target.getUuid();
+
+        // Vérifie s'il y a une demande en attente
+        TeleportRequest request = teleportRequests.remove(targetId);
+        if (request == null) {
+            target.sendMessage(Text.literal("No teleport request to deny."), false);
+            return 0;
+        }
+
+        // Annule le timeout
+        request.timeoutTask.cancel(false);
+
+        // Notifie le joueur demandeur
+        ServerPlayerEntity requester = context.getSource().getServer().getPlayerManager().getPlayer(request.requesterId);
+        if (requester != null) {
+            requester.sendMessage(Text.literal("Teleport request to " + target.getEntityName() + " has been denied."), false);
+        }
+
+        target.sendMessage(Text.literal("You denied the teleport request from " + (requester != null ? requester.getEntityName() : "an offline player") + "."), false);
+
+        return 1;
+    }
+    
+    
+    @SuppressWarnings("unchecked")
+	private static int deleteSpawn(CommandContext<ServerCommandSource> context, String name) {
+        ServerCommandSource source = context.getSource();
+
+        // Vérifier si le spawn existe
+        if (!spawnLocations.containsKey(name)) {
+            source.sendFeedback((Supplier<Text>) Text.literal("Spawn location '" + name + "' does not exist."), false);
+            return 0;
+        }
+
+        // Supprimer le spawn de la mémoire
+        spawnLocations.remove(name);
+
+        // Sauvegarder les changements dans le fichier
+        saveSpawns();
+
+        source.sendFeedback((Supplier<Text>) Text.literal("Spawn location '" + name + "' has been deleted."), false);
+        return 1;
+    }
+    
+    private static void saveSpawns() {
+        try (FileWriter writer = new FileWriter(SPAWN_FILE)) {
+            Map<String, Map<String, Integer>> rawData = new HashMap<>();
+
+            // Convertir les BlockPos en données JSON
+            spawnLocations.forEach((name, pos) -> {
+                Map<String, Integer> posData = new HashMap<>();
+                posData.put("x", pos.getX());
+                posData.put("y", pos.getY());
+                posData.put("z", pos.getZ());
+                rawData.put(name, posData);
+            });
+
+            GSON.toJson(rawData, writer);
+        } catch (IOException e) {
+            System.err.println("Failed to save spawn locations: " + e.getMessage());
+        }
+    }
+    
+    private static int setWarpPoint(CommandContext<ServerCommandSource> context, String name) {
         ServerPlayerEntity player = context.getSource().getPlayer();
         BlockPos currentPos = player.getBlockPos();
 
@@ -112,6 +297,8 @@ public class ModCommands {
         player.sendMessage(Text.literal("Spawn point '" + name + "' set!"), false);
         return 1;
     }
+    
+    
     
     private static void loadSpawnPoints() {
         if (SPAWN_FILE.exists()) {
@@ -231,8 +418,8 @@ public class ModCommands {
     }
 
     private static void loadHomes() {
-        if (DATA_FILE.exists()) {
-            try (FileReader reader = new FileReader(DATA_FILE)) {
+        if (HOME_FILE.exists()) {
+            try (FileReader reader = new FileReader(HOME_FILE)) {
                 // Lis le JSON dans une Map de Map<String, Map<String, Integer>>
                 Type type = new TypeToken<Map<String, Map<String, Map<String, Integer>>>>() {}.getType();
                 Map<String, Map<String, Map<String, Integer>>> rawData = GSON.fromJson(reader, type);
@@ -256,7 +443,7 @@ public class ModCommands {
     }
 
     private static void saveHomes() {
-        try (FileWriter writer = new FileWriter(DATA_FILE)) {
+        try (FileWriter writer = new FileWriter(HOME_FILE)) {
             Map<String, Map<String, Map<String, Integer>>> rawData = new HashMap<>();
 
             // Convertir les BlockPos en données brutes pour JSON
