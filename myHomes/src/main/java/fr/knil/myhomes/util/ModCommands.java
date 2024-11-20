@@ -38,12 +38,14 @@ public class ModCommands {
     private static final File HOME_FILE = new File(DATA_DIRECTORY, "home_positions.json"); // Fichier des homes
     private static final File SPAWN_FILE = new File(DATA_DIRECTORY, "spawn_locations.json"); // Fichier des spawns
     private static final File WARP_FILE = new File(DATA_DIRECTORY, "warp_locations.json"); // Fichier des spawns
+    
     private static final Map<String, Map<String, BlockPos>> savedHomes = new HashMap<>();
+    private static final Map<String, BlockPos> warpLocations = new HashMap<>();
+    private static final MutablePosition spawn = new MutablePosition();    
     private static final Gson GSON = new Gson();
-    private static final Map<String, BlockPos> spawnPoints = new HashMap<>();
+    
     private static final Map<UUID, TeleportRequest> teleportRequests = new HashMap<>();
     private static final ScheduledExecutorService scheduler = Executors.newScheduledThreadPool(1);
-    private static final Map<String, BlockPos> spawnLocations = new HashMap<>();
 
     static {
         // Créer le répertoire si nécessaire
@@ -58,10 +60,10 @@ public class ModCommands {
 
     public static void registerCommands() {
         loadHomes();
-        loadSpawnPoints();
+        loadSpawn();
+        loadWarps();        
 
-        CommandRegistrationCallback.EVENT.register((dispatcher, registryAccess, environment) -> {
-            
+        CommandRegistrationCallback.EVENT.register((dispatcher, registryAccess, environment) -> {            
         	
         	// Commande /sethome <nom>
             dispatcher.register(literal("sethome")
@@ -86,52 +88,64 @@ public class ModCommands {
                     .executes(context -> deleteHome(context, getString(context, "name"))))
             );
             
-         // Commande /tp pour tous les joueurs
+         // Commande /tp <joueur>
             dispatcher.register(literal("tp")
                 .then(argument("player", StringArgumentType.string())
                     .executes(context -> teleportToPlayer(context, StringArgumentType.getString(context, "player"))))
             );
 
-            // Commande /tphere
+            // Commande /tphere <joueur>
             dispatcher.register(literal("tphere")
                 .then(argument("player", StringArgumentType.string())
                     .executes(context -> teleportHere(context, StringArgumentType.getString(context, "player"))))
             );
             
+            // Commande /tpa <joueur>
             dispatcher.register(literal("tpa")
             	    .then(argument("player", string())
             	        .executes(context -> sendTeleportRequest(context, getString(context, "player"))))
             	);
 
-            
+            // Commande /tpyes
             dispatcher.register(literal("tpyes")
             	    .executes(ModCommands::acceptTeleportRequest));
 
-            
+            // Commande /tpno
             dispatcher.register(literal("tpno")
             	    .executes(ModCommands::denyTeleportRequest));
            
             
             // commande /spawn
             dispatcher.register(literal("spawn")
-            	    .executes(context -> teleportToSpawn(context, "spawn"))
-            	    .then(argument("name", string())
-            	        .executes(context -> teleportToSpawn(context, getString(context, "name"))))
-            	);
+            	    .executes(ModCommands::teleportToSpawn));
             
-            // commande /setspawn
+            // commande /setspawn            
+            dispatcher.register(literal("setspawn")
+            	        .executes(context -> setSpawnPoint(context))
+            	);        
+            
+            // commande /setwarp <nom>
             dispatcher.register(literal("setwarp")
             	    .then(argument("name", string())
             	        .executes(context -> setWarpPoint(context, getString(context, "name"))))
             	);
             
-            
-            
-            dispatcher.register(literal("delspawn")
+            //commande /delwarp <nom>
+            dispatcher.register(literal("delwarp")
             	    .then(argument("name", string())
-            	        .executes(context -> deleteSpawn(context, getString(context, "name"))))
+            	        .executes(context -> deleteWarp(context, getString(context, "name"))))
             	);
-                                   
+                         
+         // Commande /warp <nom>
+            dispatcher.register(literal("warp")
+                .then(argument("name", string())
+                    .executes(context -> teleportToWarp(context, getString(context, "name"))))
+            );
+            
+         // commande /warps
+            dispatcher.register(literal("warps")
+            	    .executes(ModCommands::listWarps));   
+         
         });
     }
     
@@ -234,32 +248,59 @@ public class ModCommands {
     }
     
     
-    @SuppressWarnings("unchecked")
-	private static int deleteSpawn(CommandContext<ServerCommandSource> context, String name) {
-        ServerCommandSource source = context.getSource();
+    private static int setWarpPoint(CommandContext<ServerCommandSource> context, String name) {
+        ServerPlayerEntity player = context.getSource().getPlayer();
+        BlockPos currentPos = player.getBlockPos();
 
-        // Vérifier si le spawn existe
-        if (!spawnLocations.containsKey(name)) {
-            source.sendFeedback((Supplier<Text>) Text.literal("Spawn location '" + name + "' does not exist."), false);
-            return 0;
+        warpLocations.put(name, currentPos);
+
+        // Sauvegarder dans le fichier
+        try (FileWriter writer = new FileWriter(WARP_FILE)) {
+            Map<String, Map<String, Integer>> rawData = new HashMap<>();
+            warpLocations.forEach((key, pos) -> {
+                Map<String, Integer> coords = new HashMap<>();
+                coords.put("x", pos.getX());
+                coords.put("y", pos.getY());
+                coords.put("z", pos.getZ());
+                rawData.put(key, coords);
+            });
+            GSON.toJson(rawData, writer);
+        } catch (IOException e) {
+            System.err.println("Failed to save spawn points: " + e.getMessage());
         }
 
-        // Supprimer le spawn de la mémoire
-        spawnLocations.remove(name);
-
-        // Sauvegarder les changements dans le fichier
-        saveSpawns();
-
-        source.sendFeedback((Supplier<Text>) Text.literal("Spawn location '" + name + "' has been deleted."), false);
+        player.sendMessage(Text.literal("Warp point '" + name + "' set!"), false);
         return 1;
     }
     
-    private static void saveSpawns() {
+    private static int setSpawnPoint(CommandContext<ServerCommandSource> context) {
+        ServerPlayerEntity player = context.getSource().getPlayer();
+        BlockPos currentPos = player.getBlockPos();
+        
+        spawn.set(currentPos.getX(), currentPos.getY(), currentPos.getZ());
+
+        // Sauvegarder dans le fichier
         try (FileWriter writer = new FileWriter(SPAWN_FILE)) {
+        	Map<String, Integer> coords = new HashMap<>();
+        	coords.put("x", currentPos.getX());
+            coords.put("y", currentPos.getY());
+            coords.put("z", currentPos.getZ());
+            GSON.toJson(coords, writer);
+        } catch (IOException e) {
+            System.err.println("Failed to save spawn points: " + e.getMessage());
+        }
+
+        player.sendMessage(Text.literal("Spawn point set!"), false);
+        return 1;
+    }
+    
+    
+    private static void saveWarps() {
+        try (FileWriter writer = new FileWriter(WARP_FILE)) {
             Map<String, Map<String, Integer>> rawData = new HashMap<>();
 
             // Convertir les BlockPos en données JSON
-            spawnLocations.forEach((name, pos) -> {
+            warpLocations.forEach((name, pos) -> {
                 Map<String, Integer> posData = new HashMap<>();
                 posData.put("x", pos.getX());
                 posData.put("y", pos.getY());
@@ -273,36 +314,30 @@ public class ModCommands {
         }
     }
     
-    private static int setWarpPoint(CommandContext<ServerCommandSource> context, String name) {
-        ServerPlayerEntity player = context.getSource().getPlayer();
-        BlockPos currentPos = player.getBlockPos();
+        
+    private static void loadSpawn() {
+        if (SPAWN_FILE.exists()) {
+            try (FileReader reader = new FileReader(SPAWN_FILE)) {
+                Type type = new TypeToken<Map<String, Integer>>() {}.getType();
+                Map<String, Integer> coords = GSON.fromJson(reader, type);
 
-        spawnPoints.put(name, currentPos);
-
-        // Sauvegarder dans le fichier
-        try (FileWriter writer = new FileWriter(SPAWN_FILE)) {
-            Map<String, Map<String, Integer>> rawData = new HashMap<>();
-            spawnPoints.forEach((key, pos) -> {
-                Map<String, Integer> coords = new HashMap<>();
-                coords.put("x", pos.getX());
-                coords.put("y", pos.getY());
-                coords.put("z", pos.getZ());
-                rawData.put(key, coords);
-            });
-            GSON.toJson(rawData, writer);
-        } catch (IOException e) {
-            System.err.println("Failed to save spawn points: " + e.getMessage());
+                if (coords.containsKey("x") && coords.containsKey("y") && coords.containsKey("z")) {
+                    int x = coords.get("x");
+                    int y = coords.get("y");
+                    int z = coords.get("z");
+                    spawn.set(x, y, z);
+                }
+                
+            } catch (IOException e) {
+                System.err.println("Failed to load spawn points: " + e.getMessage());
+            }
         }
-
-        player.sendMessage(Text.literal("Spawn point '" + name + "' set!"), false);
-        return 1;
     }
     
     
-    
-    private static void loadSpawnPoints() {
-        if (SPAWN_FILE.exists()) {
-            try (FileReader reader = new FileReader(SPAWN_FILE)) {
+    private static void loadWarps() {
+        if (WARP_FILE.exists()) {
+            try (FileReader reader = new FileReader(WARP_FILE)) {
                 Type type = new TypeToken<Map<String, Map<String, Integer>>>() {}.getType();
                 Map<String, Map<String, Integer>> rawData = GSON.fromJson(reader, type);
 
@@ -312,7 +347,7 @@ public class ModCommands {
                         int x = coords.get("x");
                         int y = coords.get("y");
                         int z = coords.get("z");
-                        spawnPoints.put(name, new BlockPos(x, y, z));
+                        warpLocations.put(name, new BlockPos(x, y, z));
                     }
                 });
             } catch (IOException e) {
@@ -321,9 +356,20 @@ public class ModCommands {
         }
     }
     
-    private static int teleportToSpawn(CommandContext<ServerCommandSource> context, String name) {
+    
+    private static int teleportToSpawn(CommandContext<ServerCommandSource> context) {
         ServerPlayerEntity player = context.getSource().getPlayer();
-        BlockPos targetPos = spawnPoints.getOrDefault(name, spawnPoints.get("spawn"));
+        BlockPos targetPos = new BlockPos(spawn.getX(),spawn.getY(),spawn.getZ());
+
+        player.requestTeleport(targetPos.getX() + 0.5, targetPos.getY(), targetPos.getZ() + 0.5);
+        player.sendMessage(Text.literal("Teleported to spawn."), false);
+        return 1;
+    }
+    
+    
+    private static int teleportToWarp(CommandContext<ServerCommandSource> context, String name) {
+        ServerPlayerEntity player = context.getSource().getPlayer();
+        BlockPos targetPos = warpLocations.get(name);
 
         if (targetPos == null) {
             player.sendMessage(Text.literal("Spawn point '" + name + "' not found."), false);
@@ -334,6 +380,29 @@ public class ModCommands {
         player.sendMessage(Text.literal("Teleported to " + name + "."), false);
         return 1;
     }
+    
+   
+    
+    @SuppressWarnings("unchecked")
+	private static int deleteWarp(CommandContext<ServerCommandSource> context, String name) {
+        ServerCommandSource source = context.getSource();
+
+        // Vérifier si le spawn existe
+        if (!warpLocations.containsKey(name)) {
+            source.sendFeedback((Supplier<Text>) Text.literal("Spawn location '" + name + "' does not exist."), false);
+            return 0;
+        }
+
+        // Supprimer le spawn de la mémoire
+        warpLocations.remove(name);
+
+        // Sauvegarder les changements dans le fichier
+        saveWarps();
+
+        source.sendFeedback((Supplier<Text>) Text.literal("Spawn location '" + name + "' has been deleted."), false);
+        return 1;
+    }
+    
     
     private static int setHome(CommandContext<ServerCommandSource> context, String name) {
         ServerPlayerEntity player = context.getSource().getPlayer();
@@ -396,6 +465,24 @@ public class ModCommands {
         player.sendMessage(Text.literal(homeList.substring(0, homeList.length() - 2)), false);
         return 1;
     }
+    
+    
+    private static int listWarps(CommandContext<ServerCommandSource> context) {
+        ServerPlayerEntity player = context.getSource().getPlayer();
+
+        // Vérifier s'il existe des warps
+        if (warpLocations.isEmpty()) {
+            player.sendMessage(Text.literal("You have no warp set! Use /setwarp <name> to create one."), false);
+            return 0;
+        }
+
+        // Afficher la liste des warps
+        StringBuilder warpList = new StringBuilder("Your warp: ");
+        warpLocations.keySet().forEach(name -> warpList.append(name).append(", "));
+        player.sendMessage(Text.literal(warpList.substring(0, warpList.length() - 2)), false);
+        return 1;
+    }
+    
 
     private static int deleteHome(CommandContext<ServerCommandSource> context, String name) {
         ServerPlayerEntity player = context.getSource().getPlayer();
