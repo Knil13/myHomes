@@ -10,7 +10,6 @@ import net.fabricmc.fabric.api.command.v2.CommandRegistrationCallback;
 import net.minecraft.server.command.ServerCommandSource;
 import net.minecraft.server.network.ServerPlayerEntity;
 import net.minecraft.text.Text;
-import net.minecraft.util.Formatting;
 import net.minecraft.util.math.BlockPos;
 
 import java.io.File;
@@ -25,7 +24,6 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
-import java.util.function.Supplier;
 
 import static net.minecraft.server.command.CommandManager.argument;
 import static net.minecraft.server.command.CommandManager.literal;
@@ -58,7 +56,7 @@ public class ModCommands {
         }
     }
 
-    public static void registerCommands() {
+	public static void registerCommands() {
         loadHomes();
         loadSpawn();
         loadWarps();        
@@ -144,7 +142,14 @@ public class ModCommands {
             
          // commande /warps
             dispatcher.register(literal("warps")
-            	    .executes(ModCommands::listWarps));   
+            	    .executes(ModCommands::listWarps));              
+            
+            dispatcher.register(literal("test")
+            	        .executes(context -> {
+            	        	context.getSource().getPlayer().sendMessage(Text.translatable("test.key"), false);
+            	            return 1;
+            	        })
+            	);
          
         });
     }
@@ -166,30 +171,30 @@ public class ModCommands {
         ServerPlayerEntity target = context.getSource().getServer().getPlayerManager().getPlayer(targetName);
 
         if (target == null) {
-            requester.sendMessage(Text.literal("Player '" + targetName + "' not found."), false);
+            requester.sendMessage(Text.translatable("message.myhomes.player_not_found", targetName), false);
             return 0;
         }
 
         UUID targetId = target.getUuid();
 
         // Vérifie si une demande est déjà en attente
-        if (teleportRequests.containsKey(targetId)) {
-            requester.sendMessage(Text.literal("A teleport request is already pending for " + target.getEntityName() + "."), false);
+        if (teleportRequests.containsKey(targetId)) {            
+            requester.sendMessage(Text.translatable("message.myhomes.request_already_pending", target.getEntityName()), false);
             return 0;
         }
 
         // Planifie un timeout pour la demande
         ScheduledFuture<?> timeoutTask = scheduler.schedule(() -> {
             teleportRequests.remove(targetId);
-            target.sendMessage(Text.literal("Teleport request from " + requester.getEntityName() + " has expired."), false);
+            requester.sendMessage(Text.translatable("message.myhomes.request_expired", target.getEntityName()), false);
         }, 30, TimeUnit.SECONDS);
 
         // Enregistre la demande
         teleportRequests.put(targetId, new TeleportRequest(requester.getUuid(), timeoutTask));
 
-        // Envoie un message au joueur cible
-        target.sendMessage(Text.literal(requester.getEntityName() + " wants to teleport to you. Use /tpyes to accept or /tpno to deny.").formatted(Formatting.YELLOW), false);
-        requester.sendMessage(Text.literal("Teleport request sent to " + target.getEntityName() + "."), false);
+        // Envoie un message au joueur cible        
+        target.sendMessage(Text.translatable("message.myhomes.target_teleport_request", requester.getEntityName()), false);
+        requester.sendMessage(Text.translatable("message.myhomes.requester_teleport_request", target.getEntityName()), false);
 
         return 1;
     }
@@ -202,7 +207,8 @@ public class ModCommands {
         // Vérifie s'il y a une demande en attente
         TeleportRequest request = teleportRequests.remove(targetId);
         if (request == null) {
-            target.sendMessage(Text.literal("No teleport request to accept."), false);
+        	Text accept = Text.translatable("message.myhomes.accept");
+        	target.sendMessage(Text.translatable("message.myhomes.no_teleport_request", accept), false);
             return 0;
         }
 
@@ -213,10 +219,12 @@ public class ModCommands {
         ServerPlayerEntity requester = context.getSource().getServer().getPlayerManager().getPlayer(request.requesterId);
         if (requester != null) {
             requester.requestTeleport(target.getX(), target.getY(), target.getZ());
-            requester.sendMessage(Text.literal("Teleport request accepted. You have been teleported to " + target.getEntityName() + "."), false);
-            target.sendMessage(Text.literal(requester.getEntityName() + " has been teleported to you."), false);
+
+            Text target_teleport_to_you = Text.translatable("message.myhomes.target_teleport_to_you",target.getEntityName());
+            requester.sendMessage(Text.translatable("message.myhomes.requester_teleport_request_accepted",target_teleport_to_you), false);
+            target.sendMessage(Text.translatable("message.myhomes.you_teleport_to_target", requester.getEntityName()), false);
         } else {
-            target.sendMessage(Text.literal("Player who sent the request is no longer online."), false);
+            target.sendMessage(Text.translatable("message.myhomes.requester_not_online"), false);
         }
 
         return 1;
@@ -229,7 +237,8 @@ public class ModCommands {
         // Vérifie s'il y a une demande en attente
         TeleportRequest request = teleportRequests.remove(targetId);
         if (request == null) {
-            target.sendMessage(Text.literal("No teleport request to deny."), false);
+        	Text deny = Text.translatable("message.myhomes.deny");
+        	target.sendMessage(Text.translatable("message.myhomes.no_teleport_request", deny), false);
             return 0;
         }
 
@@ -238,11 +247,12 @@ public class ModCommands {
 
         // Notifie le joueur demandeur
         ServerPlayerEntity requester = context.getSource().getServer().getPlayerManager().getPlayer(request.requesterId);
-        if (requester != null) {
-            requester.sendMessage(Text.literal("Teleport request to " + target.getEntityName() + " has been denied."), false);
+        if (requester != null) {            
+            requester.sendMessage(Text.translatable("message.myhomes.requester_request_denied", target.getEntityName()), false);
         }
-
-        target.sendMessage(Text.literal("You denied the teleport request from " + (requester != null ? requester.getEntityName() : "an offline player") + "."), false);
+        
+        Text offline_player = Text.translatable("message.myhomes.offline_player");
+        target.sendMessage(Text.translatable("message.myhomes.target_request_denied", (requester != null ? requester.getEntityName() : offline_player)), false);
 
         return 1;
     }
@@ -269,7 +279,7 @@ public class ModCommands {
             System.err.println("Failed to save spawn points: " + e.getMessage());
         }
 
-        player.sendMessage(Text.literal("Warp point '" + name + "' set!"), false);
+        player.sendMessage((Text.translatable("message.myhomes.warp_set", name, currentPos.getX(),currentPos.getY(),currentPos.getZ())), false);
         return 1;
     }
     
@@ -290,7 +300,7 @@ public class ModCommands {
             System.err.println("Failed to save spawn points: " + e.getMessage());
         }
 
-        player.sendMessage(Text.literal("Spawn point set!"), false);
+        player.sendMessage((Text.translatable("message.myhomes.spawn_set", currentPos.getX(),currentPos.getY(),currentPos.getZ())), false);
         return 1;
     }
     
@@ -361,8 +371,8 @@ public class ModCommands {
         ServerPlayerEntity player = context.getSource().getPlayer();
         BlockPos targetPos = new BlockPos(spawn.getX(),spawn.getY(),spawn.getZ());
 
-        player.requestTeleport(targetPos.getX() + 0.5, targetPos.getY(), targetPos.getZ() + 0.5);
-        player.sendMessage(Text.literal("Teleported to spawn."), false);
+        player.requestTeleport(targetPos.getX() + 0.5, targetPos.getY(), targetPos.getZ() + 0.5);        
+        player.sendMessage(Text.translatable("message.myhomes.spawn_teleport"), false);
         return 1;
     }
     
@@ -372,37 +382,16 @@ public class ModCommands {
         BlockPos targetPos = warpLocations.get(name);
 
         if (targetPos == null) {
-            player.sendMessage(Text.literal("Spawn point '" + name + "' not found."), false);
+            player.sendMessage(Text.literal("Warp point '" + name + "' not found."), false);
             return 0;
         }
 
         player.requestTeleport(targetPos.getX() + 0.5, targetPos.getY(), targetPos.getZ() + 0.5);
-        player.sendMessage(Text.literal("Teleported to " + name + "."), false);
+        player.sendMessage(Text.translatable("message.myhomes.spawn_teleport", name), false);
         return 1;
     }
     
-   
-    
-    @SuppressWarnings("unchecked")
-	private static int deleteWarp(CommandContext<ServerCommandSource> context, String name) {
-        ServerCommandSource source = context.getSource();
-
-        // Vérifier si le spawn existe
-        if (!warpLocations.containsKey(name)) {
-            source.sendFeedback((Supplier<Text>) Text.literal("Spawn location '" + name + "' does not exist."), false);
-            return 0;
-        }
-
-        // Supprimer le spawn de la mémoire
-        warpLocations.remove(name);
-
-        // Sauvegarder les changements dans le fichier
-        saveWarps();
-
-        source.sendFeedback((Supplier<Text>) Text.literal("Spawn location '" + name + "' has been deleted."), false);
-        return 1;
-    }
-    
+     
     
     private static int setHome(CommandContext<ServerCommandSource> context, String name) {
         ServerPlayerEntity player = context.getSource().getPlayer();
@@ -418,8 +407,8 @@ public class ModCommands {
         // Sauvegarder dans le fichier
         saveHomes();
 
-        // Retourner un message au joueur
-        player.sendMessage(Text.literal("Home '" + name + "' saved at: " + currentPos.getX() + ", " + currentPos.getY() + ", " + currentPos.getZ()), false);
+        // Retourner un message au joueur        
+        player.sendMessage(Text.translatable("message.myhomes.home_set", name, currentPos.getX(), currentPos.getY(), currentPos.getZ()), false);
         return 1;
     }
 
@@ -428,8 +417,8 @@ public class ModCommands {
         String playerId = player.getUuidAsString();
 
         // Vérifier si le joueur a des homes sauvegardés
-        if (!savedHomes.containsKey(playerId) || !savedHomes.get(playerId).containsKey(name)) {
-            player.sendMessage(Text.literal("Home '" + name + "' not found! Use /sethome <name> first."), false);
+        if (!savedHomes.containsKey(playerId) || !savedHomes.get(playerId).containsKey(name)) {            
+            player.sendMessage(Text.translatable("message.myhomes.home_not_found", name), false);
             return 0;
         }
 
@@ -444,7 +433,7 @@ public class ModCommands {
             player.getPitch()
         );
 
-        player.sendMessage(Text.literal("Teleported to home '" + name + "'!"), false);
+        player.sendMessage(Text.translatable("message.myhomes.home_teleport", name), false);
         return 1;
     }
 
@@ -454,13 +443,14 @@ public class ModCommands {
         String playerId = player.getUuidAsString();
 
         // Vérifier si le joueur a des homes sauvegardés
-        if (!savedHomes.containsKey(playerId) || savedHomes.get(playerId).isEmpty()) {
-            player.sendMessage(Text.literal("You have no homes set! Use /sethome <name> to create one."), false);
+        if (!savedHomes.containsKey(playerId) || savedHomes.get(playerId).isEmpty()) {            
+            player.sendMessage(Text.translatable("message.myhomes.no_homes"), false);
             return 0;
         }
 
         // Afficher la liste des homes
-        StringBuilder homeList = new StringBuilder("Your homes: ");
+        Text homes = Text.translatable( "message.myhomes.homes");
+        StringBuilder homeList = new StringBuilder(homes.toString());
         savedHomes.get(playerId).keySet().forEach(name -> homeList.append(name).append(", "));
         player.sendMessage(Text.literal(homeList.substring(0, homeList.length() - 2)), false);
         return 1;
@@ -472,12 +462,13 @@ public class ModCommands {
 
         // Vérifier s'il existe des warps
         if (warpLocations.isEmpty()) {
-            player.sendMessage(Text.literal("You have no warp set! Use /setwarp <name> to create one."), false);
+        	player.sendMessage(Text.translatable("message.myhomes.no_warps"), false);
             return 0;
         }
 
         // Afficher la liste des warps
-        StringBuilder warpList = new StringBuilder("Your warp: ");
+        Text warps = Text.translatable( "message.myhomes.warps");
+        StringBuilder warpList = new StringBuilder(warps.toString());
         warpLocations.keySet().forEach(name -> warpList.append(name).append(", "));
         player.sendMessage(Text.literal(warpList.substring(0, warpList.length() - 2)), false);
         return 1;
@@ -490,7 +481,7 @@ public class ModCommands {
 
         // Vérifier si le joueur a des homes sauvegardés
         if (!savedHomes.containsKey(playerId) || !savedHomes.get(playerId).containsKey(name)) {
-            player.sendMessage(Text.literal("Home '" + name + "' not found!"), false);
+        	player.sendMessage(Text.translatable("message.myhomes.home_not_exist", name), false);
             return 0;
         }
 
@@ -500,10 +491,30 @@ public class ModCommands {
         // Sauvegarder dans le fichier
         saveHomes();
 
-        player.sendMessage(Text.literal("Home '" + name + "' has been deleted."), false);
+        player.sendMessage(Text.translatable("message.myhomes.home_deleted", name), false);
         return 1;
     }
 
+    
+	private static int deleteWarp(CommandContext<ServerCommandSource> context, String name) {
+        ServerPlayerEntity player = context.getSource().getPlayer();
+
+        // Vérifier si le spawn existe
+        if (!warpLocations.containsKey(name)) {
+        	player.sendMessage(Text.translatable("message.myhomes.warp_not_exist", name), false);
+            return 0;
+        }
+
+        // Supprimer le spawn de la mémoire
+        warpLocations.remove(name);
+
+        // Sauvegarder les changements dans le fichier
+        saveWarps();
+
+        player.sendMessage(Text.translatable("message.myhomes.warp_deleted", name), false);
+        return 1;
+    }
+    
     private static void loadHomes() {
         if (HOME_FILE.exists()) {
             try (FileReader reader = new FileReader(HOME_FILE)) {
@@ -569,7 +580,8 @@ public class ModCommands {
             targetPlayer.getPitch()
         );
 
-        sourcePlayer.sendMessage(Text.literal("Teleported to player '" + targetName + "'!"), false);
+        sourcePlayer.sendMessage(Text.translatable("message.myhomes.you_teleport_to_target", targetName), false);
+        
         return 1;
     }
 
@@ -590,7 +602,7 @@ public class ModCommands {
             sourcePlayer.getPitch()
         );
 
-        sourcePlayer.sendMessage(Text.literal("Player '" + targetName + "' teleported to you!"), false);
+        sourcePlayer.sendMessage(Text.translatable("message.myhomes.target_teleport_to_you", targetName), false);
         return 1;
     }
 
