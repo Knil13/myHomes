@@ -11,6 +11,7 @@ import net.minecraft.server.command.ServerCommandSource;
 import net.minecraft.server.network.ServerPlayerEntity;
 import net.minecraft.text.Text;
 import net.minecraft.util.math.BlockPos;
+import net.minecraft.server.world.ServerWorld;
 
 import java.io.File;
 import java.io.FileReader;
@@ -31,14 +32,16 @@ import static com.mojang.brigadier.arguments.StringArgumentType.getString;
 import static com.mojang.brigadier.arguments.StringArgumentType.string;
 
 
+
 public class ModCommands {
 	private static final File DATA_DIRECTORY = new File("myHome_files"); // Répertoire des fichiers
     private static final File HOME_FILE = new File(DATA_DIRECTORY, "home_positions.json"); // Fichier des homes
     private static final File SPAWN_FILE = new File(DATA_DIRECTORY, "spawn_locations.json"); // Fichier des spawns
-    private static final File WARP_FILE = new File(DATA_DIRECTORY, "warp_locations.json"); // Fichier des spawns
-    
+    private static final File WARP_FILE = new File(DATA_DIRECTORY, "warp_locations.json"); // Fichier des spawns 
+   
     private static final Map<String, Map<String, BlockPos>> savedHomes = new HashMap<>();
     private static final Map<String, BlockPos> warpLocations = new HashMap<>();
+    private static final Map<String, teleportPoint> backLocations = new HashMap<>();
     private static final MutablePosition spawn = new MutablePosition();    
     private static final Gson GSON = new Gson();
     
@@ -142,17 +145,20 @@ public class ModCommands {
             
          // commande /warps
             dispatcher.register(literal("warps")
-            	    .executes(ModCommands::listWarps));              
+            	    .executes(ModCommands::listWarps));             
             
+         // commande /back
+            dispatcher.register(literal("back")
+            	    .executes(ModCommands::backTeleport));  
+            
+         // commande /test
             dispatcher.register(literal("test")
-            	        .executes(context -> {
-            	        	context.getSource().getPlayer().sendMessage(Text.translatable("test.key"), false);
-            	            return 1;
-            	        })
-            	);
-         
+            	    .executes(ModCommands::test));
+                        
         });
-    }
+        
+        
+    }	
     
  // Classe interne pour gérer une demande de téléportation
     private static class TeleportRequest {
@@ -163,15 +169,22 @@ public class ModCommands {
             this.requesterId = requesterId;
             this.timeoutTask = timeoutTask;
         }
-    }
+    }  
     
+    private static int test(CommandContext<ServerCommandSource> context) throws CommandSyntaxException {
+   	 	ServerPlayerEntity player = context.getSource().getPlayer();  
+        player.sendMessage(Text.literal(TranslationManager.translate("message.myhomes.test", "de Knil")), false);
+
+        return 1;
+   }
+   
     
     private static int sendTeleportRequest(CommandContext<ServerCommandSource> context, String targetName) throws CommandSyntaxException {
         ServerPlayerEntity requester = context.getSource().getPlayer();
         ServerPlayerEntity target = context.getSource().getServer().getPlayerManager().getPlayer(targetName);
 
         if (target == null) {
-            requester.sendMessage(Text.translatable("message.myhomes.player_not_found", targetName), false);
+            requester.sendMessage(Text.literal("§cJoueur " + targetName + "§cintrouvable."), false);
             return 0;
         }
 
@@ -207,8 +220,7 @@ public class ModCommands {
         // Vérifie s'il y a une demande en attente
         TeleportRequest request = teleportRequests.remove(targetId);
         if (request == null) {
-        	Text accept = Text.translatable("message.myhomes.accept");
-        	target.sendMessage(Text.translatable("message.myhomes.no_teleport_request", accept), false);
+        	target.sendMessage(Text.translatable("message.myhomes.no_teleport_request"), false);
             return 0;
         }
 
@@ -237,8 +249,7 @@ public class ModCommands {
         // Vérifie s'il y a une demande en attente
         TeleportRequest request = teleportRequests.remove(targetId);
         if (request == null) {
-        	Text deny = Text.translatable("message.myhomes.deny");
-        	target.sendMessage(Text.translatable("message.myhomes.no_teleport_request", deny), false);
+        	target.sendMessage(Text.translatable("message.myhomes.no_teleport_request"), false);
             return 0;
         }
 
@@ -382,13 +393,45 @@ public class ModCommands {
         BlockPos targetPos = warpLocations.get(name);
 
         if (targetPos == null) {
-            player.sendMessage(Text.literal("Warp point '" + name + "' not found."), false);
+            player.sendMessage(Text.translatable("message.myhomes.warp_not_exist", name), false);
             return 0;
         }
+        
+        saveBack(context);
 
         player.requestTeleport(targetPos.getX() + 0.5, targetPos.getY(), targetPos.getZ() + 0.5);
-        player.sendMessage(Text.translatable("message.myhomes.spawn_teleport", name), false);
+        player.sendMessage(Text.translatable("message.myhomes.warp_teleport", name), false);
         return 1;
+    }
+    
+    private static int saveBack(CommandContext<ServerCommandSource> context) {
+    	ServerPlayerEntity player = context.getSource().getPlayer();
+        BlockPos currentPos = player.getBlockPos();
+        ServerWorld world = player.getServerWorld(); // Récupère le monde actuel
+        
+        teleportPoint tp = new teleportPoint(world, currentPos.getX(), currentPos.getY(), currentPos.getZ(), player.getYaw(), player.getPitch());
+        backLocations.put(player.getUuidAsString(), tp);
+        return 1;
+    }
+    
+    
+    private static int backTeleport(CommandContext<ServerCommandSource> context) throws CommandSyntaxException {
+    	 ServerPlayerEntity player = context.getSource().getPlayer();
+         String playerId = player.getUuidAsString();
+
+         // Vérifier si le joueur a des homes sauvegardés
+         if (!backLocations.containsKey(playerId)) {            
+             player.sendMessage(Text.literal("no back !"), false);
+             return 0;
+         }
+
+         teleportPoint tp = backLocations.get(playerId);
+
+         PlayerTeleport.teleportPlayer(player, tp);       
+        
+
+         player.sendMessage(Text.literal("Back !"), false);
+         return 1;
     }
     
      
@@ -418,7 +461,7 @@ public class ModCommands {
 
         // Vérifier si le joueur a des homes sauvegardés
         if (!savedHomes.containsKey(playerId) || !savedHomes.get(playerId).containsKey(name)) {            
-            player.sendMessage(Text.translatable("message.myhomes.home_not_found", name), false);
+            player.sendMessage(Text.translatable("message.myhomes.home_not_exist", name), false);
             return 0;
         }
 
@@ -449,8 +492,8 @@ public class ModCommands {
         }
 
         // Afficher la liste des homes
-        Text homes = Text.translatable( "message.myhomes.homes");
-        StringBuilder homeList = new StringBuilder(homes.toString());
+        player.sendMessage(Text.translatable("message.myhomes.homes"), false);
+        StringBuilder homeList = new StringBuilder();
         savedHomes.get(playerId).keySet().forEach(name -> homeList.append(name).append(", "));
         player.sendMessage(Text.literal(homeList.substring(0, homeList.length() - 2)), false);
         return 1;
@@ -467,8 +510,8 @@ public class ModCommands {
         }
 
         // Afficher la liste des warps
-        Text warps = Text.translatable( "message.myhomes.warps");
-        StringBuilder warpList = new StringBuilder(warps.toString());
+        player.sendMessage(Text.translatable("message.myhomes.warps"), false);
+        StringBuilder warpList = new StringBuilder();
         warpLocations.keySet().forEach(name -> warpList.append(name).append(", "));
         player.sendMessage(Text.literal(warpList.substring(0, warpList.length() - 2)), false);
         return 1;
@@ -568,7 +611,7 @@ public class ModCommands {
         ServerPlayerEntity targetPlayer = context.getSource().getServer().getPlayerManager().getPlayer(targetName);
 
         if (targetPlayer == null) {
-            sourcePlayer.sendMessage(Text.literal("Player '" + targetName + "' not found!"), false);
+                        sourcePlayer.sendMessage(Text.translatable("message.myhomes.player_not_found", targetName), false);
             return 0;
         }
 
@@ -590,7 +633,7 @@ public class ModCommands {
         ServerPlayerEntity targetPlayer = context.getSource().getServer().getPlayerManager().getPlayer(targetName);
 
         if (targetPlayer == null) {
-            sourcePlayer.sendMessage(Text.literal("Player '" + targetName + "' not found!"), false);
+        	sourcePlayer.sendMessage(Text.translatable("message.myhomes.player_not_found", targetName), false);
             return 0;
         }
 
