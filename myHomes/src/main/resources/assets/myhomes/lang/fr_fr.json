@@ -26,6 +26,7 @@
 	"message.myhomes.home_not_exist": "§cLe home §b'%s' §cn'existe pas.",
 	"message.myhomes.warp_not_exist": "§cLe warp §b'%s' §cn'existe pas.",
 	"message.myhomes.home_deleted": "§2Le home §b'%s' §2a été supprimé.",
-	"message.myhomes.warp_deleted": "§2Le warp §b'%s' §2a été supprimé.", 
-	"message.myhomes.test": "c'est un test %s"  
+	"message.myhomes.warp_deleted": "§2Le warp §b'%s' §2a été supprimé.",
+	"message.myhomes.no_back": "Pas de back trouvé !",  
+	"message.myhomes.test": "Test de %s"  
 }

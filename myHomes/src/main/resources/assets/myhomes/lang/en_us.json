@@ -29,6 +29,7 @@
 	"message.myhomes.home_not_exist": "Home '%s' does not exist.",
 	"message.myhomes.warp_not_exist": "Warp '%s' does not exist.",
 	"message.myhomes.home_deleted": "Home '%s' has been deleted.",
-	"message.myhomes.warp_deleted": "Warp '%s' has been deleted.", 
-	"message.myhomes.test": "it's a test %s" 
+	"message.myhomes.warp_deleted": "Warp '%s' has been deleted.",
+	"message.myhomes.no_back": "No back", 
+	"message.myhomes.test": "Test of %s" 
 }
