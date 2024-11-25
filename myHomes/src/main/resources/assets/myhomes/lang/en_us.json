@@ -30,6 +30,7 @@
 	"message.myhomes.warp_not_exist": "Warp '%s' does not exist.",
 	"message.myhomes.home_deleted": "Home '%s' has been deleted.",
 	"message.myhomes.warp_deleted": "Warp '%s' has been deleted.",
-	"message.myhomes.no_back": "No back", 
+	"message.myhomes.no_back": "No back",
+	"message.myhomes.back": "reverse teleportation !",
 	"message.myhomes.test": "Test of %s" 
 }

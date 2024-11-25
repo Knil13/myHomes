@@ -37,10 +37,10 @@ public class ModCommands {
     private static final File SPAWN_FILE = new File(DATA_DIRECTORY, "spawn_locations.json"); // Fichier des spawns
     private static final File WARP_FILE = new File(DATA_DIRECTORY, "warp_locations.json"); // Fichier des spawns 
    
-    private static final Map<String, Map<String, BlockPos>> savedHomes = new HashMap<>();
-    private static final Map<String, BlockPos> warpLocations = new HashMap<>();
+    private static final Map<String, Map<String, teleportPoint>> savedHomes = new HashMap<>();
+    private static final Map<String, teleportPoint> warpLocations = new HashMap<>();
     private static final Map<String, teleportPoint> backLocations = new HashMap<>();
-    private static final MutablePosition spawn = new MutablePosition();    
+    private static final teleportPoint spawn = new teleportPoint();    
     private static final Gson GSON = new Gson();
     
     private static final Map<UUID, TeleportRequest> teleportRequests = new HashMap<>();
@@ -276,23 +276,16 @@ public class ModCommands {
     private static int setWarpPoint(CommandContext<ServerCommandSource> context, String name) {
         ServerPlayerEntity player = context.getSource().getPlayer();
         BlockPos currentPos = player.getBlockPos();
+        ServerWorld world = player.getServerWorld();
 
-        warpLocations.put(name, currentPos);
+        String w = world.getRegistryKey().getValue().toString();
+        
+        teleportPoint tp = new teleportPoint(w, currentPos.getX(), currentPos.getY(), currentPos.getZ(), player.getYaw(), player.getPitch());
 
-        // Sauvegarder dans le fichier
-        try (FileWriter writer = new FileWriter(WARP_FILE)) {
-            Map<String, Map<String, Integer>> rawData = new HashMap<>();
-            warpLocations.forEach((key, pos) -> {
-                Map<String, Integer> coords = new HashMap<>();
-                coords.put("x", pos.getX());
-                coords.put("y", pos.getY());
-                coords.put("z", pos.getZ());
-                rawData.put(key, coords);
-            });
-            GSON.toJson(rawData, writer);
-        } catch (IOException e) {
-            System.err.println("Failed to save spawn points: " + e.getMessage());
-        }
+        warpLocations.put(name, tp);
+        
+     // Sauvegarder les changements dans le fichier
+        saveWarps();        
 
         player.sendMessage(Text.literal(TranslationManager.translate("message.myhomes.warp_set", name, currentPos.getX(),currentPos.getY(),currentPos.getZ())), false);
         return 1;
@@ -301,15 +294,20 @@ public class ModCommands {
     private static int setSpawnPoint(CommandContext<ServerCommandSource> context) {
         ServerPlayerEntity player = context.getSource().getPlayer();
         BlockPos currentPos = player.getBlockPos();
+        ServerWorld world = player.getServerWorld();
+        String w = world.getRegistryKey().getValue().toString();
         
-        spawn.set(currentPos.getX(), currentPos.getY(), currentPos.getZ());
+        spawn.set(w, currentPos.getX(), currentPos.getY(), currentPos.getZ(), player.getYaw(), player.getPitch());
 
         // Sauvegarder dans le fichier
         try (FileWriter writer = new FileWriter(SPAWN_FILE)) {
-        	Map<String, Integer> coords = new HashMap<>();
+        	Map<String, Object> coords = new HashMap<>();
+        	coords.put("world", w);
         	coords.put("x", currentPos.getX());
             coords.put("y", currentPos.getY());
             coords.put("z", currentPos.getZ());
+            coords.put("yaw", player.getYaw());
+            coords.put("pitch", player.getPitch());
             GSON.toJson(coords, writer);
         } catch (IOException e) {
             System.err.println("Failed to save spawn points: " + e.getMessage());
@@ -321,21 +319,49 @@ public class ModCommands {
     
     
     private static void saveWarps() {
+    	// Sauvegarder dans le fichier
         try (FileWriter writer = new FileWriter(WARP_FILE)) {
-            Map<String, Map<String, Integer>> rawData = new HashMap<>();
+            Map<String, Map<String, Object>> rawData = new HashMap<>();
+            warpLocations.forEach((key, pos) -> {
+                Map<String, Object> coords = new HashMap<>();
+                coords.put("world", pos.getWorld());
+                coords.put("x", pos.getX());
+                coords.put("y", pos.getY());
+                coords.put("z", pos.getZ());
+                coords.put("yaw", pos.getYaw());
+                coords.put("pitch", pos.getPitch()); 
+                rawData.put(key, coords);
+            });
+            GSON.toJson(rawData, writer);
+        } catch (IOException e) {
+            System.err.println("Failed to save spawn points: " + e.getMessage());
+        }
+    }
+    
+    
+    private static void saveHomes() {
+        try (FileWriter writer = new FileWriter(HOME_FILE)) {
+            Map<String, Map<String, Map<String, Object>>> rawData = new HashMap<>();
 
-            // Convertir les BlockPos en données JSON
-            warpLocations.forEach((name, pos) -> {
-                Map<String, Integer> posData = new HashMap<>();
-                posData.put("x", pos.getX());
-                posData.put("y", pos.getY());
-                posData.put("z", pos.getZ());
-                rawData.put(name, posData);
+            // Convertir les BlockPos en données brutes pour JSON
+            savedHomes.forEach((uuid, homes) -> {
+                Map<String, Map<String, Object>> homeData = new HashMap<>();
+                homes.forEach((key, pos) -> {
+                    Map<String, Object> coords = new HashMap<>();
+                    coords.put("world", pos.getWorld());
+                    coords.put("x", pos.getX());
+                    coords.put("y", pos.getY());
+                    coords.put("z", pos.getZ());
+                    coords.put("yaw", pos.getYaw());
+                    coords.put("pitch", pos.getPitch()); 
+                    homeData.put(key, coords);
+                });
+                rawData.put(uuid, homeData);
             });
 
             GSON.toJson(rawData, writer);
         } catch (IOException e) {
-            System.err.println("Failed to save spawn locations: " + e.getMessage());
+            System.err.println("Failed to save home positions: " + e.getMessage());
         }
     }
     
@@ -343,14 +369,17 @@ public class ModCommands {
     private static void loadSpawn() {
         if (SPAWN_FILE.exists()) {
             try (FileReader reader = new FileReader(SPAWN_FILE)) {
-                Type type = new TypeToken<Map<String, Integer>>() {}.getType();
-                Map<String, Integer> coords = GSON.fromJson(reader, type);
+                Type type = new TypeToken<Map<String, Object>>() {}.getType();
+                Map<String, Object> coords = GSON.fromJson(reader, type);
 
                 if (coords.containsKey("x") && coords.containsKey("y") && coords.containsKey("z")) {
-                    int x = coords.get("x");
-                    int y = coords.get("y");
-                    int z = coords.get("z");
-                    spawn.set(x, y, z);
+                    String w = (String) coords.get("world");
+                	double x = (double) coords.get("x");
+                    double y = (double) coords.get("y");
+                    double z = (double) coords.get("z");
+                    double yaw = (double) coords.get("yaw");
+                    double pitch = (double) coords.get("pitch");
+                    spawn.set(w, x, y, z, yaw, pitch);
                 }
                 
             } catch (IOException e) {
@@ -363,16 +392,19 @@ public class ModCommands {
     private static void loadWarps() {
         if (WARP_FILE.exists()) {
             try (FileReader reader = new FileReader(WARP_FILE)) {
-                Type type = new TypeToken<Map<String, Map<String, Integer>>>() {}.getType();
-                Map<String, Map<String, Integer>> rawData = GSON.fromJson(reader, type);
+                Type type = new TypeToken<Map<String, Map<String, Object>>>() {}.getType();
+                Map<String, Map<String, Object>> rawData = GSON.fromJson(reader, type);
 
                 // Convertir les données en BlockPos
                 rawData.forEach((name, coords) -> {
                     if (coords.containsKey("x") && coords.containsKey("y") && coords.containsKey("z")) {
-                        int x = coords.get("x");
-                        int y = coords.get("y");
-                        int z = coords.get("z");
-                        warpLocations.put(name, new BlockPos(x, y, z));
+                    	String w = (String) coords.get("world");
+                    	double x = (double) coords.get("x");
+                        double y = (double) coords.get("y");
+                        double z = (double) coords.get("z");
+                        double yaw = (double) coords.get("yaw");
+                        double pitch = (double) coords.get("pitch");
+                        warpLocations.put(name, new teleportPoint(w, x, y, z, yaw, pitch));
                     }
                 });
             } catch (IOException e) {
@@ -382,14 +414,43 @@ public class ModCommands {
     }
     
     
+    private static void loadHomes() {
+        if (HOME_FILE.exists()) {
+            try (FileReader reader = new FileReader(HOME_FILE)) {
+                // Lis le JSON dans une Map de Map<String, Map<String, Integer>>
+                Type type = new TypeToken<Map<String, Map<String, Map<String, Object>>>>() {}.getType();
+                Map<String, Map<String, Map<String, Object>>> rawData = GSON.fromJson(reader, type);
+
+                // Convertir les données brutes en BlockPos
+                rawData.forEach((uuid, homes) -> {
+                    Map<String, teleportPoint> playerHomes = new HashMap<>();
+                    
+                    homes.forEach((name, coords) -> {
+                    	String w = (String) coords.get("world");
+                    	double x = (double) coords.get("x");
+                        double y = (double) coords.get("y");
+                        double z = (double) coords.get("z");
+                        double yaw = (double) coords.get("yaw");
+                        double pitch = (double) coords.get("pitch");
+                        playerHomes.put(name, new teleportPoint(w, x, y, z, yaw, pitch));
+                    });
+                    savedHomes.put(uuid, playerHomes);
+                });
+
+            } catch (IOException e) {
+                System.err.println("Failed to load home positions: " + e.getMessage());
+            }
+        }
+    }
+        
+    
     private static int teleportToSpawn(CommandContext<ServerCommandSource> context) {
         ServerPlayerEntity player = context.getSource().getPlayer();
-        BlockPos targetPos = new BlockPos(spawn.getX(),spawn.getY(),spawn.getZ());
-        
       //save du /back
         saveBack(context);
-
-        player.requestTeleport(targetPos.getX() + 0.5, targetPos.getY(), targetPos.getZ() + 0.5);                
+        
+        PlayerTeleport.teleportPlayer(player, spawn);
+        
         player.sendMessage(Text.literal(TranslationManager.translate("message.myhomes.spawn_teleport")), false);
         return 1;
     }
@@ -397,9 +458,9 @@ public class ModCommands {
     
     private static int teleportToWarp(CommandContext<ServerCommandSource> context, String name) {
         ServerPlayerEntity player = context.getSource().getPlayer();
-        BlockPos targetPos = warpLocations.get(name);
+        teleportPoint tp = warpLocations.get(name);
 
-        if (targetPos == null) {            
+        if (tp == null) {            
             player.sendMessage(Text.literal(TranslationManager.translate("message.myhomes.warp_not_exist", name)), false);
             return 0;
         }
@@ -407,7 +468,7 @@ public class ModCommands {
       //save du /back
         saveBack(context);
 
-        player.requestTeleport(targetPos.getX() + 0.5, targetPos.getY(), targetPos.getZ() + 0.5);
+        PlayerTeleport.teleportPlayer(player, tp);
         player.sendMessage(Text.literal(TranslationManager.translate("message.myhomes.warp_teleport", name)), false);
         return 1;
     }
@@ -415,9 +476,10 @@ public class ModCommands {
     private static int saveBack(CommandContext<ServerCommandSource> context) {
     	ServerPlayerEntity player = context.getSource().getPlayer();
         BlockPos currentPos = player.getBlockPos();
-        ServerWorld world = player.getServerWorld(); // Récupère le monde actuel
+        ServerWorld world = player.getServerWorld();
+        String w = world.getRegistryKey().getValue().toString();
         
-        teleportPoint tp = new teleportPoint(world, currentPos.getX(), currentPos.getY(), currentPos.getZ(), player.getYaw(), player.getPitch());
+        teleportPoint tp = new teleportPoint(w, currentPos.getX(), currentPos.getY(), currentPos.getZ(), player.getYaw(), player.getPitch());
         backLocations.remove(player.getUuidAsString());
         backLocations.put(player.getUuidAsString(), tp);
         return 1;
@@ -432,17 +494,16 @@ public class ModCommands {
          if (!backLocations.containsKey(playerId)) {           
              player.sendMessage(Text.literal(TranslationManager.translate("message.myhomes.no_back")), false);
              return 0;
-         }
-                
+         }                
          
          teleportPoint tp = backLocations.get(playerId);
          
          //save du /back
          saveBack(context);
+         
          PlayerTeleport.teleportPlayer(player, tp);       
         
-
-         player.sendMessage(Text.literal("Back !"), false);
+         player.sendMessage(Text.literal(TranslationManager.translate("message.myhomes.back")), false);
          return 1;
     }
     
@@ -452,12 +513,16 @@ public class ModCommands {
         ServerPlayerEntity player = context.getSource().getPlayer();
         String playerId = player.getUuidAsString();
         BlockPos currentPos = player.getBlockPos();
+        ServerWorld world = player.getServerWorld();
+        String w = world.getRegistryKey().getValue().toString();
+        
+        teleportPoint tp = new teleportPoint(w, currentPos.getX(), currentPos.getY(), currentPos.getZ(), player.getYaw(), player.getPitch());
 
         // Récupérer ou créer la map des homes du joueur
         savedHomes.computeIfAbsent(playerId, k -> new HashMap<>());
 
         // Ajouter ou remplacer le home
-        savedHomes.get(playerId).put(name, currentPos);
+        savedHomes.get(playerId).put(name, tp);
 
         // Sauvegarder dans le fichier
         saveHomes();
@@ -477,18 +542,12 @@ public class ModCommands {
             return 0;
         }
 
-        BlockPos homePos = savedHomes.get(playerId).get(name);
+        teleportPoint tp = savedHomes.get(playerId).get(name);
         
       //save du /back
         saveBack(context);
-        // Téléporter le joueur à la position sauvegardée en utilisant requestTeleport
-        player.networkHandler.requestTeleport(
-            homePos.getX() + 0.5, // Ajustement pour centrer sur le bloc
-            homePos.getY(),
-            homePos.getZ() + 0.5,
-            player.getYaw(), // Conserve l'orientation du joueur
-            player.getPitch()
-        );
+        
+        PlayerTeleport.teleportPlayer(player, tp);         
         
         player.sendMessage(Text.literal(TranslationManager.translate("message.myhomes.home_teleport", name)), false);
         return 1;
@@ -549,7 +608,7 @@ public class ModCommands {
         // Sauvegarder dans le fichier
         saveHomes();
         
-        player.sendMessage(Text.literal(TranslationManager.translate("message.myhomes.home_not_exist", name)), false);
+        player.sendMessage(Text.literal(TranslationManager.translate("message.myhomes.home_deleted", name)), false);
         return 1;
     }
 
@@ -573,53 +632,8 @@ public class ModCommands {
         return 1;
     }
     
-    private static void loadHomes() {
-        if (HOME_FILE.exists()) {
-            try (FileReader reader = new FileReader(HOME_FILE)) {
-                // Lis le JSON dans une Map de Map<String, Map<String, Integer>>
-                Type type = new TypeToken<Map<String, Map<String, Map<String, Integer>>>>() {}.getType();
-                Map<String, Map<String, Map<String, Integer>>> rawData = GSON.fromJson(reader, type);
 
-                // Convertir les données brutes en BlockPos
-                rawData.forEach((uuid, homes) -> {
-                    Map<String, BlockPos> homeMap = new HashMap<>();
-                    homes.forEach((name, posData) -> {
-                        int x = posData.get("x");
-                        int y = posData.get("y");
-                        int z = posData.get("z");
-                        homeMap.put(name, new BlockPos(x, y, z));
-                    });
-                    savedHomes.put(uuid, homeMap);
-                });
-
-            } catch (IOException e) {
-                System.err.println("Failed to load home positions: " + e.getMessage());
-            }
-        }
-    }
-
-    private static void saveHomes() {
-        try (FileWriter writer = new FileWriter(HOME_FILE)) {
-            Map<String, Map<String, Map<String, Integer>>> rawData = new HashMap<>();
-
-            // Convertir les BlockPos en données brutes pour JSON
-            savedHomes.forEach((uuid, homes) -> {
-                Map<String, Map<String, Integer>> homeData = new HashMap<>();
-                homes.forEach((name, pos) -> {
-                    Map<String, Integer> posData = new HashMap<>();
-                    posData.put("x", pos.getX());
-                    posData.put("y", pos.getY());
-                    posData.put("z", pos.getZ());
-                    homeData.put(name, posData);
-                });
-                rawData.put(uuid, homeData);
-            });
-
-            GSON.toJson(rawData, writer);
-        } catch (IOException e) {
-            System.err.println("Failed to save home positions: " + e.getMessage());
-        }
-    }
+    
     
     private static int teleportToPlayer(CommandContext<ServerCommandSource> context, String targetName) {
         ServerPlayerEntity sourcePlayer = context.getSource().getPlayer();
