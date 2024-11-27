@@ -172,7 +172,8 @@ public class ModCommands {
     
     private static int test(CommandContext<ServerCommandSource> context) throws CommandSyntaxException {
    	 	ServerPlayerEntity player = context.getSource().getPlayer();  
-        player.sendMessage(Text.literal(TranslationManager.translate("message.myhomes.test", player.getName())), false);
+   	 	String playerName = player.getEntityName();
+        player.sendMessage(Text.literal(TranslationManager.translate("message.myhomes.test", playerName)), false);
 
         return 1;
    }
@@ -180,6 +181,7 @@ public class ModCommands {
     
     private static int sendTeleportRequest(CommandContext<ServerCommandSource> context, String targetName) throws CommandSyntaxException {
         ServerPlayerEntity requester = context.getSource().getPlayer();
+        String requesterName = requester.getEntityName();
         ServerPlayerEntity target = context.getSource().getServer().getPlayerManager().getPlayer(targetName);
 
         if (target == null) {
@@ -191,29 +193,32 @@ public class ModCommands {
 
         // Vérifie si une demande est déjà en attente
         if (teleportRequests.containsKey(targetId)) {            
-            requester.sendMessage(Text.literal(TranslationManager.translate("message.myhomes.request_already_pending", target.getEntityName())), false);
+            requester.sendMessage(Text.literal(TranslationManager.translate("message.myhomes.request_already_pending", targetName)), false);
             return 0;
         }
 
         // Planifie un timeout pour la demande
         ScheduledFuture<?> timeoutTask = scheduler.schedule(() -> {
             teleportRequests.remove(targetId);
-            requester.sendMessage(Text.literal(TranslationManager.translate("message.myhomes.request_expired", target.getEntityName())), false);
+            requester.sendMessage(Text.literal(TranslationManager.translate("message.myhomes.requester_request_expired", targetName)), false);
+            target.sendMessage(Text.literal(TranslationManager.translate("message.myhomes.target_request_expired", requesterName)), false);
         }, 30, TimeUnit.SECONDS);
 
         // Enregistre la demande
         teleportRequests.put(targetId, new TeleportRequest(requester.getUuid(), timeoutTask));
 
         // Envoie un message au joueur cible        
-        target.sendMessage(Text.literal(TranslationManager.translate("message.myhomes.target_teleport_request", requester.getEntityName())), false);
-        requester.sendMessage(Text.literal(TranslationManager.translate("message.myhomes.requester_teleport_request", target.getEntityName())), false);
+        target.sendMessage(Text.literal(TranslationManager.translate("message.myhomes.target_teleport_request", requesterName)), false);
+        requester.sendMessage(Text.literal(TranslationManager.translate("message.myhomes.requester_teleport_request", targetName)), false);
 
         return 1;
     }
 
     
-    private static int acceptTeleportRequest(CommandContext<ServerCommandSource> context) throws CommandSyntaxException {
+    @SuppressWarnings("unused")
+	private static int acceptTeleportRequest(CommandContext<ServerCommandSource> context) throws CommandSyntaxException {
         ServerPlayerEntity target = context.getSource().getPlayer();
+        String targetName = target.getEntityName();
         UUID targetId = target.getUuid();
 
         // Vérifie s'il y a une demande en attente
@@ -231,13 +236,13 @@ public class ModCommands {
         
         // Téléporte le joueur demandeur             
         ServerPlayerEntity requester = context.getSource().getServer().getPlayerManager().getPlayer(request.requesterId);
+        String requesterName = requester.getEntityName();
         if (requester != null) {
+           
+            requester.sendMessage(Text.literal(TranslationManager.translate("message.myhomes.requester_teleport_request_accepted")), false);
             requester.requestTeleport(target.getX(), target.getY(), target.getZ());
-
-            Text target_teleport_to_you = Text.literal(TranslationManager.translate("message.myhomes.target_teleport_to_you", target.getEntityName()));
-            
-            requester.sendMessage(Text.literal(TranslationManager.translate("message.myhomes.requester_teleport_request_accepted", target_teleport_to_you)), false);
-            target.sendMessage(Text.literal(TranslationManager.translate("message.myhomes.you_teleport_to_target", requester.getEntityName())), false);
+            requester.sendMessage(Text.literal(TranslationManager.translate("message.myhomes.you_teleport_to_target", targetName)), false);
+            target.sendMessage(Text.literal(TranslationManager.translate("message.myhomes.requester_teleport_to_you", requesterName)), false);
         } else {
             target.sendMessage(Text.literal(TranslationManager.translate("message.myhomes.requester_not_online")), false);            
         }
@@ -247,12 +252,12 @@ public class ModCommands {
     
     private static int denyTeleportRequest(CommandContext<ServerCommandSource> context) throws CommandSyntaxException {
         ServerPlayerEntity target = context.getSource().getPlayer();
+        String targetName = target.getEntityName();
         UUID targetId = target.getUuid();
 
         // Vérifie s'il y a une demande en attente
         TeleportRequest request = teleportRequests.remove(targetId);
         if (request == null) {
-        	target.sendMessage(Text.translatable("message.myhomes.no_teleport_request"), false);
         	target.sendMessage(Text.literal(TranslationManager.translate("message.myhomes.no_teleport_request")), false);
             return 0;
         }
@@ -262,13 +267,14 @@ public class ModCommands {
 
         // Notifie le joueur demandeur
         ServerPlayerEntity requester = context.getSource().getServer().getPlayerManager().getPlayer(request.requesterId);
+        String requesterName = requester.getEntityName();
         if (requester != null) {            
-            target.sendMessage(Text.literal(TranslationManager.translate("message.myhomes.requester_request_denied", target.getEntityName())), false);
+        	requester.sendMessage(Text.literal(TranslationManager.translate("message.myhomes.requester_request_denied", targetName)), false);
         }
         
         Text offline_player =Text.literal(TranslationManager.translate("message.myhomes.offline_player"));        
-        target.sendMessage(Text.literal(TranslationManager.translate("message.myhomes.target_request_denied", (requester != null ? requester.getEntityName() : offline_player))), false);
-
+        target.sendMessage(Text.literal(TranslationManager.translate("message.myhomes.target_request_denied", (requester != null ? requesterName : offline_player))), false);
+        
         return 1;
     }
     
