@@ -102,8 +102,14 @@ public class ModCommands {
             // Commande /tpa <joueur>
             dispatcher.register(literal("tpa")
             	    .then(argument("player", string())
-            	        .executes(context -> sendTeleportRequest(context, getString(context, "player"))))
-            	);
+            	        .executes(context -> sendTeleportRequest(context, getString(context, "player"), "ToTarget")))
+            		);
+            
+            // Commande /tpah
+            dispatcher.register(literal("tpahere")
+            		.then(argument("player", string())
+                 	        .executes(context -> sendTeleportRequest(context, getString(context, "player"), "ToRequester")))
+            		);
 
             // Commande /tpyes
             dispatcher.register(literal("tpyes")
@@ -112,6 +118,9 @@ public class ModCommands {
             // Commande /tpno
             dispatcher.register(literal("tpno")
             	    .executes(ModCommands::denyTeleportRequest));
+            
+           
+            
            
             
             // commande /spawn
@@ -162,10 +171,12 @@ public class ModCommands {
     private static class TeleportRequest {
         final UUID requesterId;
         final ScheduledFuture<?> timeoutTask;
+        final String TypeRequest;
 
-        public TeleportRequest(UUID requesterId, ScheduledFuture<?> timeoutTask) {
+        public TeleportRequest(UUID requesterId, ScheduledFuture<?> timeoutTask, String TypeRequest) {
             this.requesterId = requesterId;
             this.timeoutTask = timeoutTask;
+            this.TypeRequest = TypeRequest;
         }
     }  
     
@@ -179,7 +190,7 @@ public class ModCommands {
    }
    
     
-    private static int sendTeleportRequest(CommandContext<ServerCommandSource> context, String targetName) throws CommandSyntaxException {
+    private static int sendTeleportRequest(CommandContext<ServerCommandSource> context, String targetName, String TypeRequest) throws CommandSyntaxException {
         ServerPlayerEntity requester = context.getSource().getPlayer();
         String requesterName = requester.getEntityName();
         ServerPlayerEntity target = context.getSource().getServer().getPlayerManager().getPlayer(targetName);
@@ -205,14 +216,22 @@ public class ModCommands {
         }, 30, TimeUnit.SECONDS);
 
         // Enregistre la demande
-        teleportRequests.put(targetId, new TeleportRequest(requester.getUuid(), timeoutTask));
+        teleportRequests.put(targetId, new TeleportRequest(requester.getUuid(), timeoutTask, TypeRequest));
 
-        // Envoie un message au joueur cible        
-        target.sendMessage(Text.literal(TranslationManager.translate("message.myhomes.target_teleport_request", requesterName)), false);
-        requester.sendMessage(Text.literal(TranslationManager.translate("message.myhomes.requester_teleport_request", targetName)), false);
+        // Envoie un message au joueur cible 
+        if (TypeRequest == "ToTarget") {
+        	target.sendMessage(Text.literal(TranslationManager.translate("message.myhomes.target_teleport_request", requesterName)), false);
+        }
+        else {
+        	
+        	target.sendMessage(Text.literal(TranslationManager.translate("message.myhomes.target_teleport_request_here", requesterName)), false);
+        }
+        
+     // Envoie un message au joueur request 
+    	requester.sendMessage(Text.literal(TranslationManager.translate("message.myhomes.requester_teleport_request", targetName)), false);
 
         return 1;
-    }
+    } 
 
     
     @SuppressWarnings("unused")
@@ -238,11 +257,19 @@ public class ModCommands {
         ServerPlayerEntity requester = context.getSource().getServer().getPlayerManager().getPlayer(request.requesterId);
         String requesterName = requester.getEntityName();
         if (requester != null) {
-           
-            requester.sendMessage(Text.literal(TranslationManager.translate("message.myhomes.requester_teleport_request_accepted")), false);
-            requester.requestTeleport(target.getX(), target.getY(), target.getZ());
-            requester.sendMessage(Text.literal(TranslationManager.translate("message.myhomes.you_teleport_to_target", targetName)), false);
-            target.sendMessage(Text.literal(TranslationManager.translate("message.myhomes.requester_teleport_to_you", requesterName)), false);
+            if (request.TypeRequest == "ToTarget") {          	
+            	requester.sendMessage(Text.literal(TranslationManager.translate("message.myhomes.requester_teleport_request_accepted")), false);
+            	requester.requestTeleport(target.getX(), target.getY(), target.getZ());
+            	requester.sendMessage(Text.literal(TranslationManager.translate("message.myhomes.you_teleport_to_target", targetName)), false);
+            	target.sendMessage(Text.literal(TranslationManager.translate("message.myhomes.requester_teleport_to_you", requesterName)), false);
+        	}
+        	else {        		
+        		requester.sendMessage(Text.literal(TranslationManager.translate("message.myhomes.requester_teleport_request_accepted")), false);
+        		target.requestTeleport(requester.getX(), requester.getY(), requester.getZ());
+        		target.sendMessage(Text.literal(TranslationManager.translate("message.myhomes.you_teleport_to_target", requesterName)), false);
+        		requester.sendMessage(Text.literal(TranslationManager.translate("message.myhomes.requester_teleport_to_you", targetName)), false);
+        		
+        	}
         } else {
             target.sendMessage(Text.literal(TranslationManager.translate("message.myhomes.requester_not_online")), false);            
         }

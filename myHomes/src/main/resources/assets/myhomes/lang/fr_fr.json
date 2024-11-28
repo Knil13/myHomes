@@ -4,6 +4,7 @@
 	"message.myhomes.target_request_expired": "§cLa demande de téléportation de %s §ca expiré.",
 	"message.myhomes.requester_request_expired": "§cLa demande de téléportation vers %s §ca expiré.",
 	"message.myhomes.target_teleport_request": "§b%s souhaite se téléporter à vous. §2Utilisez /tpyes pour accepter §cou /tpno pour refuser.",
+	"message.myhomes.target_teleport_request_here": "§b%s souhaite vous téléporter à lui/elle. §2Utilisez /tpyes pour accepter §cou /tpno pour refuser.",
 	"message.myhomes.requester_teleport_request": "§2Demande de téléportation envoyée à §b%s.",
 	"message.myhomes.no_teleport_request": "§cAucune demande de téléportation",
 	"message.myhomes.requester_teleport_request_accepted": "§2Demande de téléportation acceptée",
