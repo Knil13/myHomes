@@ -31,18 +31,16 @@ import static net.minecraft.server.command.CommandManager.literal;
 import static com.mojang.brigadier.arguments.StringArgumentType.getString;
 import static com.mojang.brigadier.arguments.StringArgumentType.string;
 
-
-
 public class ModCommands {
 	private static final File DATA_DIRECTORY = new File("myHome_files"); // Répertoire des fichiers
     private static final File HOME_FILE = new File(DATA_DIRECTORY, "home_positions.json"); // Fichier des homes
     private static final File SPAWN_FILE = new File(DATA_DIRECTORY, "spawn_locations.json"); // Fichier des spawns
     private static final File WARP_FILE = new File(DATA_DIRECTORY, "warp_locations.json"); // Fichier des spawns 
    
-    private static final Map<String, Map<String, BlockPos>> savedHomes = new HashMap<>();
-    private static final Map<String, BlockPos> warpLocations = new HashMap<>();
+    private static final Map<String, Map<String, teleportPoint>> savedHomes = new HashMap<>();
+    private static final Map<String, teleportPoint> warpLocations = new HashMap<>();
     private static final Map<String, teleportPoint> backLocations = new HashMap<>();
-    private static final MutablePosition spawn = new MutablePosition();    
+    private static final teleportPoint spawn = new teleportPoint();    
     private static final Gson GSON = new Gson();
     
     private static final Map<UUID, TeleportRequest> teleportRequests = new HashMap<>();
@@ -104,8 +102,14 @@ public class ModCommands {
             // Commande /tpa <joueur>
             dispatcher.register(literal("tpa")
             	    .then(argument("player", string())
-            	        .executes(context -> sendTeleportRequest(context, getString(context, "player"))))
-            	);
+            	        .executes(context -> sendTeleportRequest(context, getString(context, "player"), "ToTarget")))
+            		);
+            
+            // Commande /tpah
+            dispatcher.register(literal("tpahere")
+            		.then(argument("player", string())
+                 	        .executes(context -> sendTeleportRequest(context, getString(context, "player"), "ToRequester")))
+            		);
 
             // Commande /tpyes
             dispatcher.register(literal("tpyes")
@@ -114,6 +118,9 @@ public class ModCommands {
             // Commande /tpno
             dispatcher.register(literal("tpno")
             	    .executes(ModCommands::denyTeleportRequest));
+            
+           
+            
            
             
             // commande /spawn
@@ -164,27 +171,32 @@ public class ModCommands {
     private static class TeleportRequest {
         final UUID requesterId;
         final ScheduledFuture<?> timeoutTask;
+        final String TypeRequest;
 
-        public TeleportRequest(UUID requesterId, ScheduledFuture<?> timeoutTask) {
+        public TeleportRequest(UUID requesterId, ScheduledFuture<?> timeoutTask, String TypeRequest) {
             this.requesterId = requesterId;
             this.timeoutTask = timeoutTask;
+            this.TypeRequest = TypeRequest;
         }
     }  
     
+    
     private static int test(CommandContext<ServerCommandSource> context) throws CommandSyntaxException {
    	 	ServerPlayerEntity player = context.getSource().getPlayer();  
-        player.sendMessage(Text.literal(TranslationManager.translate("message.myhomes.test", "de Knil")), false);
+   	 	String playerName = player.getEntityName();
+        player.sendMessage(Text.literal(TranslationManager.translate("message.myhomes.test", playerName)), false);
 
         return 1;
    }
    
     
-    private static int sendTeleportRequest(CommandContext<ServerCommandSource> context, String targetName) throws CommandSyntaxException {
+    private static int sendTeleportRequest(CommandContext<ServerCommandSource> context, String targetName, String TypeRequest) throws CommandSyntaxException {
         ServerPlayerEntity requester = context.getSource().getPlayer();
+        String requesterName = requester.getEntityName();
         ServerPlayerEntity target = context.getSource().getServer().getPlayerManager().getPlayer(targetName);
 
         if (target == null) {
-            requester.sendMessage(Text.literal("§cJoueur " + targetName + "§cintrouvable."), false);
+            requester.sendMessage(Text.literal(TranslationManager.translate("message.myhomes.player_not_found", targetName)), false);
             return 0;
         }
 
@@ -192,51 +204,74 @@ public class ModCommands {
 
         // Vérifie si une demande est déjà en attente
         if (teleportRequests.containsKey(targetId)) {            
-            requester.sendMessage(Text.translatable("message.myhomes.request_already_pending", target.getEntityName()), false);
+            requester.sendMessage(Text.literal(TranslationManager.translate("message.myhomes.request_already_pending", targetName)), false);
             return 0;
         }
 
         // Planifie un timeout pour la demande
         ScheduledFuture<?> timeoutTask = scheduler.schedule(() -> {
             teleportRequests.remove(targetId);
-            requester.sendMessage(Text.translatable("message.myhomes.request_expired", target.getEntityName()), false);
+            requester.sendMessage(Text.literal(TranslationManager.translate("message.myhomes.requester_request_expired", targetName)), false);
+            target.sendMessage(Text.literal(TranslationManager.translate("message.myhomes.target_request_expired", requesterName)), false);
         }, 30, TimeUnit.SECONDS);
 
         // Enregistre la demande
-        teleportRequests.put(targetId, new TeleportRequest(requester.getUuid(), timeoutTask));
+        teleportRequests.put(targetId, new TeleportRequest(requester.getUuid(), timeoutTask, TypeRequest));
 
-        // Envoie un message au joueur cible        
-        target.sendMessage(Text.translatable("message.myhomes.target_teleport_request", requester.getEntityName()), false);
-        requester.sendMessage(Text.translatable("message.myhomes.requester_teleport_request", target.getEntityName()), false);
+        // Envoie un message au joueur cible 
+        if (TypeRequest == "ToTarget") {
+        	target.sendMessage(Text.literal(TranslationManager.translate("message.myhomes.target_teleport_request", requesterName)), false);
+        }
+        else {
+        	
+        	target.sendMessage(Text.literal(TranslationManager.translate("message.myhomes.target_teleport_request_here", requesterName)), false);
+        }
+        
+     // Envoie un message au joueur request 
+    	requester.sendMessage(Text.literal(TranslationManager.translate("message.myhomes.requester_teleport_request", targetName)), false);
 
         return 1;
-    }
+    } 
 
     
-    private static int acceptTeleportRequest(CommandContext<ServerCommandSource> context) throws CommandSyntaxException {
+    @SuppressWarnings("unused")
+	private static int acceptTeleportRequest(CommandContext<ServerCommandSource> context) throws CommandSyntaxException {
         ServerPlayerEntity target = context.getSource().getPlayer();
+        String targetName = target.getEntityName();
         UUID targetId = target.getUuid();
 
         // Vérifie s'il y a une demande en attente
         TeleportRequest request = teleportRequests.remove(targetId);
-        if (request == null) {
-        	target.sendMessage(Text.translatable("message.myhomes.no_teleport_request"), false);
+        if (request == null) {        	
+        	target.sendMessage(Text.literal(TranslationManager.translate("message.myhomes.no_teleport_request")), false);
             return 0;
         }
 
         // Annule le timeout
         request.timeoutTask.cancel(false);
 
-        // Téléporte le joueur demandeur
+        //save du /back
+        saveBack(context);
+        
+        // Téléporte le joueur demandeur             
         ServerPlayerEntity requester = context.getSource().getServer().getPlayerManager().getPlayer(request.requesterId);
+        String requesterName = requester.getEntityName();
         if (requester != null) {
-            requester.requestTeleport(target.getX(), target.getY(), target.getZ());
-
-            Text target_teleport_to_you = Text.translatable("message.myhomes.target_teleport_to_you",target.getEntityName());
-            requester.sendMessage(Text.translatable("message.myhomes.requester_teleport_request_accepted",target_teleport_to_you), false);
-            target.sendMessage(Text.translatable("message.myhomes.you_teleport_to_target", requester.getEntityName()), false);
+            if (request.TypeRequest == "ToTarget") {          	
+            	requester.sendMessage(Text.literal(TranslationManager.translate("message.myhomes.requester_teleport_request_accepted")), false);
+            	requester.requestTeleport(target.getX(), target.getY(), target.getZ());
+            	requester.sendMessage(Text.literal(TranslationManager.translate("message.myhomes.you_teleport_to_target", targetName)), false);
+            	target.sendMessage(Text.literal(TranslationManager.translate("message.myhomes.requester_teleport_to_you", requesterName)), false);
+        	}
+        	else {        		
+        		requester.sendMessage(Text.literal(TranslationManager.translate("message.myhomes.requester_teleport_request_accepted")), false);
+        		target.requestTeleport(requester.getX(), requester.getY(), requester.getZ());
+        		target.sendMessage(Text.literal(TranslationManager.translate("message.myhomes.you_teleport_to_target", requesterName)), false);
+        		requester.sendMessage(Text.literal(TranslationManager.translate("message.myhomes.requester_teleport_to_you", targetName)), false);
+        		
+        	}
         } else {
-            target.sendMessage(Text.translatable("message.myhomes.requester_not_online"), false);
+            target.sendMessage(Text.literal(TranslationManager.translate("message.myhomes.requester_not_online")), false);            
         }
 
         return 1;
@@ -244,12 +279,13 @@ public class ModCommands {
     
     private static int denyTeleportRequest(CommandContext<ServerCommandSource> context) throws CommandSyntaxException {
         ServerPlayerEntity target = context.getSource().getPlayer();
+        String targetName = target.getEntityName();
         UUID targetId = target.getUuid();
 
         // Vérifie s'il y a une demande en attente
         TeleportRequest request = teleportRequests.remove(targetId);
         if (request == null) {
-        	target.sendMessage(Text.translatable("message.myhomes.no_teleport_request"), false);
+        	target.sendMessage(Text.literal(TranslationManager.translate("message.myhomes.no_teleport_request")), false);
             return 0;
         }
 
@@ -258,13 +294,14 @@ public class ModCommands {
 
         // Notifie le joueur demandeur
         ServerPlayerEntity requester = context.getSource().getServer().getPlayerManager().getPlayer(request.requesterId);
+        String requesterName = requester.getEntityName();
         if (requester != null) {            
-            requester.sendMessage(Text.translatable("message.myhomes.requester_request_denied", target.getEntityName()), false);
+        	requester.sendMessage(Text.literal(TranslationManager.translate("message.myhomes.requester_request_denied", targetName)), false);
         }
         
-        Text offline_player = Text.translatable("message.myhomes.offline_player");
-        target.sendMessage(Text.translatable("message.myhomes.target_request_denied", (requester != null ? requester.getEntityName() : offline_player)), false);
-
+        Text offline_player =Text.literal(TranslationManager.translate("message.myhomes.offline_player"));        
+        target.sendMessage(Text.literal(TranslationManager.translate("message.myhomes.target_request_denied", (requester != null ? requesterName : offline_player))), false);
+        
         return 1;
     }
     
@@ -272,66 +309,92 @@ public class ModCommands {
     private static int setWarpPoint(CommandContext<ServerCommandSource> context, String name) {
         ServerPlayerEntity player = context.getSource().getPlayer();
         BlockPos currentPos = player.getBlockPos();
+        ServerWorld world = player.getServerWorld();
 
-        warpLocations.put(name, currentPos);
+        String w = world.getRegistryKey().getValue().toString();
+        
+        teleportPoint tp = new teleportPoint(w, currentPos.getX(), currentPos.getY(), currentPos.getZ(), player.getYaw(), player.getPitch());
 
-        // Sauvegarder dans le fichier
-        try (FileWriter writer = new FileWriter(WARP_FILE)) {
-            Map<String, Map<String, Integer>> rawData = new HashMap<>();
-            warpLocations.forEach((key, pos) -> {
-                Map<String, Integer> coords = new HashMap<>();
-                coords.put("x", pos.getX());
-                coords.put("y", pos.getY());
-                coords.put("z", pos.getZ());
-                rawData.put(key, coords);
-            });
-            GSON.toJson(rawData, writer);
-        } catch (IOException e) {
-            System.err.println("Failed to save spawn points: " + e.getMessage());
-        }
+        warpLocations.put(name, tp);
+        
+     // Sauvegarder les changements dans le fichier
+        saveWarps();        
 
-        player.sendMessage((Text.translatable("message.myhomes.warp_set", name, currentPos.getX(),currentPos.getY(),currentPos.getZ())), false);
+        player.sendMessage(Text.literal(TranslationManager.translate("message.myhomes.warp_set", name, currentPos.getX(),currentPos.getY(),currentPos.getZ())), false);
         return 1;
     }
     
     private static int setSpawnPoint(CommandContext<ServerCommandSource> context) {
         ServerPlayerEntity player = context.getSource().getPlayer();
         BlockPos currentPos = player.getBlockPos();
+        ServerWorld world = player.getServerWorld();
+        String w = world.getRegistryKey().getValue().toString();
         
-        spawn.set(currentPos.getX(), currentPos.getY(), currentPos.getZ());
+        spawn.set(w, currentPos.getX(), currentPos.getY(), currentPos.getZ(), player.getYaw(), player.getPitch());
 
         // Sauvegarder dans le fichier
         try (FileWriter writer = new FileWriter(SPAWN_FILE)) {
-        	Map<String, Integer> coords = new HashMap<>();
+        	Map<String, Object> coords = new HashMap<>();
+        	coords.put("world", w);
         	coords.put("x", currentPos.getX());
             coords.put("y", currentPos.getY());
             coords.put("z", currentPos.getZ());
+            coords.put("yaw", player.getYaw());
+            coords.put("pitch", player.getPitch());
             GSON.toJson(coords, writer);
         } catch (IOException e) {
             System.err.println("Failed to save spawn points: " + e.getMessage());
         }
-
-        player.sendMessage((Text.translatable("message.myhomes.spawn_set", currentPos.getX(),currentPos.getY(),currentPos.getZ())), false);
+        
+        player.sendMessage(Text.literal(TranslationManager.translate("message.myhomes.spawn_set", currentPos.getX(),currentPos.getY(),currentPos.getZ())), false);
         return 1;
     }
     
     
     private static void saveWarps() {
+    	// Sauvegarder dans le fichier
         try (FileWriter writer = new FileWriter(WARP_FILE)) {
-            Map<String, Map<String, Integer>> rawData = new HashMap<>();
+            Map<String, Map<String, Object>> rawData = new HashMap<>();
+            warpLocations.forEach((key, pos) -> {
+                Map<String, Object> coords = new HashMap<>();
+                coords.put("world", pos.getWorld());
+                coords.put("x", pos.getX());
+                coords.put("y", pos.getY());
+                coords.put("z", pos.getZ());
+                coords.put("yaw", pos.getYaw());
+                coords.put("pitch", pos.getPitch()); 
+                rawData.put(key, coords);
+            });
+            GSON.toJson(rawData, writer);
+        } catch (IOException e) {
+            System.err.println("Failed to save spawn points: " + e.getMessage());
+        }
+    }
+    
+    
+    private static void saveHomes() {
+        try (FileWriter writer = new FileWriter(HOME_FILE)) {
+            Map<String, Map<String, Map<String, Object>>> rawData = new HashMap<>();
 
-            // Convertir les BlockPos en données JSON
-            warpLocations.forEach((name, pos) -> {
-                Map<String, Integer> posData = new HashMap<>();
-                posData.put("x", pos.getX());
-                posData.put("y", pos.getY());
-                posData.put("z", pos.getZ());
-                rawData.put(name, posData);
+            // Convertir les BlockPos en données brutes pour JSON
+            savedHomes.forEach((uuid, homes) -> {
+                Map<String, Map<String, Object>> homeData = new HashMap<>();
+                homes.forEach((key, pos) -> {
+                    Map<String, Object> coords = new HashMap<>();
+                    coords.put("world", pos.getWorld());
+                    coords.put("x", pos.getX());
+                    coords.put("y", pos.getY());
+                    coords.put("z", pos.getZ());
+                    coords.put("yaw", pos.getYaw());
+                    coords.put("pitch", pos.getPitch()); 
+                    homeData.put(key, coords);
+                });
+                rawData.put(uuid, homeData);
             });
 
             GSON.toJson(rawData, writer);
         } catch (IOException e) {
-            System.err.println("Failed to save spawn locations: " + e.getMessage());
+            System.err.println("Failed to save home positions: " + e.getMessage());
         }
     }
     
@@ -339,14 +402,17 @@ public class ModCommands {
     private static void loadSpawn() {
         if (SPAWN_FILE.exists()) {
             try (FileReader reader = new FileReader(SPAWN_FILE)) {
-                Type type = new TypeToken<Map<String, Integer>>() {}.getType();
-                Map<String, Integer> coords = GSON.fromJson(reader, type);
+                Type type = new TypeToken<Map<String, Object>>() {}.getType();
+                Map<String, Object> coords = GSON.fromJson(reader, type);
 
                 if (coords.containsKey("x") && coords.containsKey("y") && coords.containsKey("z")) {
-                    int x = coords.get("x");
-                    int y = coords.get("y");
-                    int z = coords.get("z");
-                    spawn.set(x, y, z);
+                    String w = (String) coords.get("world");
+                	double x = (double) coords.get("x");
+                    double y = (double) coords.get("y");
+                    double z = (double) coords.get("z");
+                    double yaw = (double) coords.get("yaw");
+                    double pitch = (double) coords.get("pitch");
+                    spawn.set(w, x, y, z, yaw, pitch);
                 }
                 
             } catch (IOException e) {
@@ -359,16 +425,19 @@ public class ModCommands {
     private static void loadWarps() {
         if (WARP_FILE.exists()) {
             try (FileReader reader = new FileReader(WARP_FILE)) {
-                Type type = new TypeToken<Map<String, Map<String, Integer>>>() {}.getType();
-                Map<String, Map<String, Integer>> rawData = GSON.fromJson(reader, type);
+                Type type = new TypeToken<Map<String, Map<String, Object>>>() {}.getType();
+                Map<String, Map<String, Object>> rawData = GSON.fromJson(reader, type);
 
                 // Convertir les données en BlockPos
                 rawData.forEach((name, coords) -> {
                     if (coords.containsKey("x") && coords.containsKey("y") && coords.containsKey("z")) {
-                        int x = coords.get("x");
-                        int y = coords.get("y");
-                        int z = coords.get("z");
-                        warpLocations.put(name, new BlockPos(x, y, z));
+                    	String w = (String) coords.get("world");
+                    	double x = (double) coords.get("x");
+                        double y = (double) coords.get("y");
+                        double z = (double) coords.get("z");
+                        double yaw = (double) coords.get("yaw");
+                        double pitch = (double) coords.get("pitch");
+                        warpLocations.put(name, new teleportPoint(w, x, y, z, yaw, pitch));
                     }
                 });
             } catch (IOException e) {
@@ -378,38 +447,73 @@ public class ModCommands {
     }
     
     
+    private static void loadHomes() {
+        if (HOME_FILE.exists()) {
+            try (FileReader reader = new FileReader(HOME_FILE)) {
+                // Lis le JSON dans une Map de Map<String, Map<String, Integer>>
+                Type type = new TypeToken<Map<String, Map<String, Map<String, Object>>>>() {}.getType();
+                Map<String, Map<String, Map<String, Object>>> rawData = GSON.fromJson(reader, type);
+
+                // Convertir les données brutes en BlockPos
+                rawData.forEach((uuid, homes) -> {
+                    Map<String, teleportPoint> playerHomes = new HashMap<>();
+                    
+                    homes.forEach((name, coords) -> {
+                    	String w = (String) coords.get("world");
+                    	double x = (double) coords.get("x");
+                        double y = (double) coords.get("y");
+                        double z = (double) coords.get("z");
+                        double yaw = (double) coords.get("yaw");
+                        double pitch = (double) coords.get("pitch");
+                        playerHomes.put(name, new teleportPoint(w, x, y, z, yaw, pitch));
+                    });
+                    savedHomes.put(uuid, playerHomes);
+                });
+
+            } catch (IOException e) {
+                System.err.println("Failed to load home positions: " + e.getMessage());
+            }
+        }
+    }
+        
+    
     private static int teleportToSpawn(CommandContext<ServerCommandSource> context) {
         ServerPlayerEntity player = context.getSource().getPlayer();
-        BlockPos targetPos = new BlockPos(spawn.getX(),spawn.getY(),spawn.getZ());
-
-        player.requestTeleport(targetPos.getX() + 0.5, targetPos.getY(), targetPos.getZ() + 0.5);        
-        player.sendMessage(Text.translatable("message.myhomes.spawn_teleport"), false);
+      //save du /back
+        saveBack(context);
+        
+        PlayerTeleport.teleportPlayer(player, spawn);
+        
+        player.sendMessage(Text.literal(TranslationManager.translate("message.myhomes.spawn_teleport")), false);
         return 1;
     }
     
     
     private static int teleportToWarp(CommandContext<ServerCommandSource> context, String name) {
         ServerPlayerEntity player = context.getSource().getPlayer();
-        BlockPos targetPos = warpLocations.get(name);
+        teleportPoint tp = warpLocations.get(name);
 
-        if (targetPos == null) {
-            player.sendMessage(Text.translatable("message.myhomes.warp_not_exist", name), false);
+        if (tp == null) {            
+            player.sendMessage(Text.literal(TranslationManager.translate("message.myhomes.warp_not_exist", name)), false);
             return 0;
         }
         
+      //save du /back
         saveBack(context);
 
-        player.requestTeleport(targetPos.getX() + 0.5, targetPos.getY(), targetPos.getZ() + 0.5);
-        player.sendMessage(Text.translatable("message.myhomes.warp_teleport", name), false);
+        PlayerTeleport.teleportPlayer(player, tp);
+        player.sendMessage(Text.literal(TranslationManager.translate("message.myhomes.warp_teleport", name)), false);
         return 1;
     }
     
     private static int saveBack(CommandContext<ServerCommandSource> context) {
     	ServerPlayerEntity player = context.getSource().getPlayer();
         BlockPos currentPos = player.getBlockPos();
-        ServerWorld world = player.getServerWorld(); // Récupère le monde actuel
+        ServerWorld world = player.getServerWorld();
+        String w = world.getRegistryKey().getValue().toString();
         
-        teleportPoint tp = new teleportPoint(world, currentPos.getX(), currentPos.getY(), currentPos.getZ(), player.getYaw(), player.getPitch());
+        teleportPoint tp = new teleportPoint(w, currentPos.getX(), currentPos.getY(), currentPos.getZ(), player.getYaw(), player.getPitch());
+        backLocations.remove(player.getUuidAsString());
         backLocations.put(player.getUuidAsString(), tp);
         return 1;
     }
@@ -420,17 +524,19 @@ public class ModCommands {
          String playerId = player.getUuidAsString();
 
          // Vérifier si le joueur a des homes sauvegardés
-         if (!backLocations.containsKey(playerId)) {            
-             player.sendMessage(Text.literal("no back !"), false);
+         if (!backLocations.containsKey(playerId)) {           
+             player.sendMessage(Text.literal(TranslationManager.translate("message.myhomes.no_back")), false);
              return 0;
-         }
-
+         }                
+         
          teleportPoint tp = backLocations.get(playerId);
-
+         
+         //save du /back
+         saveBack(context);
+         
          PlayerTeleport.teleportPlayer(player, tp);       
         
-
-         player.sendMessage(Text.literal("Back !"), false);
+         player.sendMessage(Text.literal(TranslationManager.translate("message.myhomes.back")), false);
          return 1;
     }
     
@@ -440,18 +546,22 @@ public class ModCommands {
         ServerPlayerEntity player = context.getSource().getPlayer();
         String playerId = player.getUuidAsString();
         BlockPos currentPos = player.getBlockPos();
+        ServerWorld world = player.getServerWorld();
+        String w = world.getRegistryKey().getValue().toString();
+        
+        teleportPoint tp = new teleportPoint(w, currentPos.getX(), currentPos.getY(), currentPos.getZ(), player.getYaw(), player.getPitch());
 
         // Récupérer ou créer la map des homes du joueur
         savedHomes.computeIfAbsent(playerId, k -> new HashMap<>());
 
         // Ajouter ou remplacer le home
-        savedHomes.get(playerId).put(name, currentPos);
+        savedHomes.get(playerId).put(name, tp);
 
         // Sauvegarder dans le fichier
         saveHomes();
 
         // Retourner un message au joueur        
-        player.sendMessage(Text.translatable("message.myhomes.home_set", name, currentPos.getX(), currentPos.getY(), currentPos.getZ()), false);
+        player.sendMessage(Text.literal(TranslationManager.translate("message.myhomes.home_set", name, currentPos.getX(), currentPos.getY(), currentPos.getZ())), false);
         return 1;
     }
 
@@ -460,23 +570,19 @@ public class ModCommands {
         String playerId = player.getUuidAsString();
 
         // Vérifier si le joueur a des homes sauvegardés
-        if (!savedHomes.containsKey(playerId) || !savedHomes.get(playerId).containsKey(name)) {            
-            player.sendMessage(Text.translatable("message.myhomes.home_not_exist", name), false);
+        if (!savedHomes.containsKey(playerId) || !savedHomes.get(playerId).containsKey(name)) {        
+            player.sendMessage(Text.literal(TranslationManager.translate("message.myhomes.home_not_exist", name)), false);
             return 0;
         }
 
-        BlockPos homePos = savedHomes.get(playerId).get(name);
-
-        // Téléporter le joueur à la position sauvegardée en utilisant requestTeleport
-        player.networkHandler.requestTeleport(
-            homePos.getX() + 0.5, // Ajustement pour centrer sur le bloc
-            homePos.getY(),
-            homePos.getZ() + 0.5,
-            player.getYaw(), // Conserve l'orientation du joueur
-            player.getPitch()
-        );
-
-        player.sendMessage(Text.translatable("message.myhomes.home_teleport", name), false);
+        teleportPoint tp = savedHomes.get(playerId).get(name);
+        
+      //save du /back
+        saveBack(context);
+        
+        PlayerTeleport.teleportPlayer(player, tp);         
+        
+        player.sendMessage(Text.literal(TranslationManager.translate("message.myhomes.home_teleport", name)), false);
         return 1;
     }
 
@@ -487,12 +593,13 @@ public class ModCommands {
 
         // Vérifier si le joueur a des homes sauvegardés
         if (!savedHomes.containsKey(playerId) || savedHomes.get(playerId).isEmpty()) {            
-            player.sendMessage(Text.translatable("message.myhomes.no_homes"), false);
+            player.sendMessage(Text.literal(TranslationManager.translate("message.myhomes.no_homes")), false);
             return 0;
         }
 
-        // Afficher la liste des homes
-        player.sendMessage(Text.translatable("message.myhomes.homes"), false);
+        // Afficher la liste des homes        
+        player.sendMessage(Text.literal(TranslationManager.translate("message.myhomes.homes")), false);
+        
         StringBuilder homeList = new StringBuilder();
         savedHomes.get(playerId).keySet().forEach(name -> homeList.append(name).append(", "));
         player.sendMessage(Text.literal(homeList.substring(0, homeList.length() - 2)), false);
@@ -504,13 +611,13 @@ public class ModCommands {
         ServerPlayerEntity player = context.getSource().getPlayer();
 
         // Vérifier s'il existe des warps
-        if (warpLocations.isEmpty()) {
-        	player.sendMessage(Text.translatable("message.myhomes.no_warps"), false);
+        if (warpLocations.isEmpty()) {        	
+        	player.sendMessage(Text.literal(TranslationManager.translate("message.myhomes.no_warps")), false);
             return 0;
         }
 
-        // Afficher la liste des warps
-        player.sendMessage(Text.translatable("message.myhomes.warps"), false);
+        // Afficher la liste des warps        
+        player.sendMessage(Text.literal(TranslationManager.translate("message.myhomes.warps")), false);
         StringBuilder warpList = new StringBuilder();
         warpLocations.keySet().forEach(name -> warpList.append(name).append(", "));
         player.sendMessage(Text.literal(warpList.substring(0, warpList.length() - 2)), false);
@@ -523,8 +630,8 @@ public class ModCommands {
         String playerId = player.getUuidAsString();
 
         // Vérifier si le joueur a des homes sauvegardés
-        if (!savedHomes.containsKey(playerId) || !savedHomes.get(playerId).containsKey(name)) {
-        	player.sendMessage(Text.translatable("message.myhomes.home_not_exist", name), false);
+        if (!savedHomes.containsKey(playerId) || !savedHomes.get(playerId).containsKey(name)) {        	
+        	player.sendMessage(Text.literal(TranslationManager.translate("message.myhomes.home_not_exist")), false);
             return 0;
         }
 
@@ -533,8 +640,8 @@ public class ModCommands {
 
         // Sauvegarder dans le fichier
         saveHomes();
-
-        player.sendMessage(Text.translatable("message.myhomes.home_deleted", name), false);
+        
+        player.sendMessage(Text.literal(TranslationManager.translate("message.myhomes.home_deleted", name)), false);
         return 1;
     }
 
@@ -543,8 +650,8 @@ public class ModCommands {
         ServerPlayerEntity player = context.getSource().getPlayer();
 
         // Vérifier si le spawn existe
-        if (!warpLocations.containsKey(name)) {
-        	player.sendMessage(Text.translatable("message.myhomes.warp_not_exist", name), false);
+        if (!warpLocations.containsKey(name)) {        	
+        	player.sendMessage(Text.literal(TranslationManager.translate("message.myhomes.warp_not_exist", name)), false);
             return 0;
         }
 
@@ -553,68 +660,25 @@ public class ModCommands {
 
         // Sauvegarder les changements dans le fichier
         saveWarps();
-
-        player.sendMessage(Text.translatable("message.myhomes.warp_deleted", name), false);
+        
+        player.sendMessage(Text.literal(TranslationManager.translate("message.myhomes.warp_deleted", name)), false);
         return 1;
     }
     
-    private static void loadHomes() {
-        if (HOME_FILE.exists()) {
-            try (FileReader reader = new FileReader(HOME_FILE)) {
-                // Lis le JSON dans une Map de Map<String, Map<String, Integer>>
-                Type type = new TypeToken<Map<String, Map<String, Map<String, Integer>>>>() {}.getType();
-                Map<String, Map<String, Map<String, Integer>>> rawData = GSON.fromJson(reader, type);
 
-                // Convertir les données brutes en BlockPos
-                rawData.forEach((uuid, homes) -> {
-                    Map<String, BlockPos> homeMap = new HashMap<>();
-                    homes.forEach((name, posData) -> {
-                        int x = posData.get("x");
-                        int y = posData.get("y");
-                        int z = posData.get("z");
-                        homeMap.put(name, new BlockPos(x, y, z));
-                    });
-                    savedHomes.put(uuid, homeMap);
-                });
-
-            } catch (IOException e) {
-                System.err.println("Failed to load home positions: " + e.getMessage());
-            }
-        }
-    }
-
-    private static void saveHomes() {
-        try (FileWriter writer = new FileWriter(HOME_FILE)) {
-            Map<String, Map<String, Map<String, Integer>>> rawData = new HashMap<>();
-
-            // Convertir les BlockPos en données brutes pour JSON
-            savedHomes.forEach((uuid, homes) -> {
-                Map<String, Map<String, Integer>> homeData = new HashMap<>();
-                homes.forEach((name, pos) -> {
-                    Map<String, Integer> posData = new HashMap<>();
-                    posData.put("x", pos.getX());
-                    posData.put("y", pos.getY());
-                    posData.put("z", pos.getZ());
-                    homeData.put(name, posData);
-                });
-                rawData.put(uuid, homeData);
-            });
-
-            GSON.toJson(rawData, writer);
-        } catch (IOException e) {
-            System.err.println("Failed to save home positions: " + e.getMessage());
-        }
-    }
+    
     
     private static int teleportToPlayer(CommandContext<ServerCommandSource> context, String targetName) {
         ServerPlayerEntity sourcePlayer = context.getSource().getPlayer();
         ServerPlayerEntity targetPlayer = context.getSource().getServer().getPlayerManager().getPlayer(targetName);
 
-        if (targetPlayer == null) {
-                        sourcePlayer.sendMessage(Text.translatable("message.myhomes.player_not_found", targetName), false);
+        if (targetPlayer == null) {            
+            sourcePlayer.sendMessage(Text.literal(TranslationManager.translate("message.myhomes.player_not_found", targetName)), false);
             return 0;
         }
-
+        
+        //save du /back
+        saveBack(context);
         sourcePlayer.networkHandler.requestTeleport(
             targetPlayer.getX(),
             targetPlayer.getY(),
@@ -623,8 +687,8 @@ public class ModCommands {
             targetPlayer.getPitch()
         );
 
-        sourcePlayer.sendMessage(Text.translatable("message.myhomes.you_teleport_to_target", targetName), false);
-        
+        sourcePlayer.sendMessage(Text.literal(TranslationManager.translate("message.myhomes.you_teleport_to_target", targetName)), false);
+                
         return 1;
     }
 
@@ -632,11 +696,14 @@ public class ModCommands {
         ServerPlayerEntity sourcePlayer = context.getSource().getPlayer();
         ServerPlayerEntity targetPlayer = context.getSource().getServer().getPlayerManager().getPlayer(targetName);
 
-        if (targetPlayer == null) {
-        	sourcePlayer.sendMessage(Text.translatable("message.myhomes.player_not_found", targetName), false);
+        if (targetPlayer == null) {        	
+        	sourcePlayer.sendMessage(Text.literal(TranslationManager.translate("message.myhomes.player_not_found", targetName)), false);
             return 0;
         }
-
+        
+        //save du /back
+        saveBack(context);
+        
         targetPlayer.networkHandler.requestTeleport(
             sourcePlayer.getX(),
             sourcePlayer.getY(),
@@ -644,8 +711,8 @@ public class ModCommands {
             sourcePlayer.getYaw(),
             sourcePlayer.getPitch()
         );
-
-        sourcePlayer.sendMessage(Text.translatable("message.myhomes.target_teleport_to_you", targetName), false);
+        
+        sourcePlayer.sendMessage(Text.literal(TranslationManager.translate("message.myhomes.target_teleport_to_you", targetName)), false);
         return 1;
     }
 

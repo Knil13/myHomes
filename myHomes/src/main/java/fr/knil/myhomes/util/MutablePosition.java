@@ -2,6 +2,7 @@ package fr.knil.myhomes.util;
 
 public class MutablePosition {
     public int x, y, z;
+    public float yaw, pitch;
 
     public MutablePosition(int x, int y, int z) {
         this.x = x;
@@ -10,15 +11,29 @@ public class MutablePosition {
     }
     
     public MutablePosition() {
-        this.x = 0;
-        this.y = 0;
-        this.z = 0;
+        
+    }
+    
+    public MutablePosition(int x, int y, int z, float yaw, float pitch) {
+        this.x = x;
+        this.y = y;
+        this.z = z;
+        this.yaw = yaw;
+        this.pitch = pitch;
     }
 
     public void set(int x, int y, int z) {
         this.x = x;
         this.y = y;
         this.z = z;
+    }
+    
+    public void set(int x, int y, int z, float yaw, float pitch) {
+        this.x = x;
+        this.y = y;
+        this.z = z;
+        this.yaw = yaw;
+        this.pitch = pitch;
     }
 
     public void add(int dx, int dy, int dz) {
@@ -38,6 +53,15 @@ public class MutablePosition {
     public Integer getZ() {    	
     	return this.z;
     }
+    
+    public float getYaw() {    	
+    	return this.yaw;
+    }
+    
+    public float getPitch() {    	
+    	return this.pitch;
+    }
+    
 
     @Override
     public String toString() {
